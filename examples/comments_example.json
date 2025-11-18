@@ -1,0 +1,46 @@
+[
+  {
+    "comment": "This is a great video! Really enjoyed watching it.",
+    "user_name": "john_doe",
+    "created_by_id": "",
+    "profile_picture": "https://example.com/avatar1.jpg",
+    "commented_at": 30.5,
+    "sentiment_score": 0.8,
+    "sentiment_confidence": 0.9,
+    "entities": [
+      {
+        "name": "video",
+        "type": "OTHER"
+      }
+    ],
+    "parent_id": "",
+    "file_url": "",
+    "file_name": ""
+  },
+  {
+    "comment": "Love this part at 1:30! So inspiring!",
+    "user_name": "jane_smith",
+    "created_by_id": "",
+    "profile_picture": "https://example.com/avatar2.jpg",
+    "commented_at": 90.0,
+    "sentiment_score": 0.95,
+    "sentiment_confidence": 0.85,
+    "entities": [],
+    "parent_id": "",
+    "file_url": "",
+    "file_name": ""
+  },
+  {
+    "comment": "I have a question about this topic...",
+    "user_name": "curious_user",
+    "created_by_id": "",
+    "profile_picture": "",
+    "commented_at": 150.0,
+    "sentiment_score": 0.0,
+    "sentiment_confidence": 0.7,
+    "entities": [],
+    "parent_id": "",
+    "file_url": "",
+    "file_name": ""
+  }
+]

@@ -1,0 +1,37 @@
+# InCast Ingestion Tool Configuration
+# Copy this file to config.yaml and update with your values
+# Environment variables take precedence over this file
+
+# API Configuration
+api:
+  backend_url: "https://api-dev.incast.ai"
+  publish_url: "https://api-dev.incast.ai/publish-comment"
+  jwt_token: ""  # Set via JWT_TOKEN environment variable for security
+
+# Processing Configuration
+processing:
+  list_file: "list.txt"
+  max_comments: 100
+  rate_limit: 0.5  # Seconds between comment API calls
+  max_retries: 3  # API call retry attempts
+  retry_delay: 1.0  # Initial retry delay in seconds
+  max_items_limit: "all"  # Limit items to process: "all" or number (e.g., 10, 50, 100). In dry_run mode defaults to 10.
+
+# Mode Configuration
+modes:
+  dry_run: false  # Test mode without actual uploads
+  video_only: false  # Upload videos only, skip comments
+  comments_only: false  # Import comments only (requires asset_id in config)
+  asset_id: ""  # Asset ID to use in comments_only mode (received after video upload)
+
+# Logging Configuration
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_file: ""  # Optional log file path (empty = console only)
+  verbose: false
+
+# Cache Configuration
+cache:
+  enabled: true
+  cleanup_after_days: 30  # Clean up cache files older than this
+

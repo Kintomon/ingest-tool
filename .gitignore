@@ -1,0 +1,17 @@
+cache/
+venv/
+_pycat
+__pycache__/
+modules/__pycache__/
+modules/cache/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzw
+*.pyzwz
+*.pyzwzw
+*.pyzwzwz
+*.pyzwzwzw
