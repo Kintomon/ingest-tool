@@ -1,8 +1,9 @@
-"""Asset Creator via GraphQL Mutation"""
+"""Asset Creator via GraphQL Mutation - Works like Frontend"""
 
 import json
 import logging
 import requests
+import mimetypes
 from typing import Dict, Optional
 from .retry import retry_with_backoff
 
@@ -10,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class AssetCreator:
-    """Create asset in InCast via GraphQL CreateAssetFromUrl mutation"""
+    """Create asset in InCast via GraphQL getSignedUrl mutation (like frontend)"""
     
     def __init__(self, backend_url: str, jwt_token: str, dry_run: bool = False, max_retries: int = 3):
         """
@@ -27,69 +28,56 @@ class AssetCreator:
         self.dry_run = dry_run
         self.max_retries = max_retries
     
-    def create_asset_from_url(
+    def get_signed_url(
         self,
-        video_url: str,
+        file_name: str,
         asset_name: str,
         asset_description: str,
-        category: Optional[str] = None,
         metadata: Optional[Dict] = None
     ) -> Dict:
         """
-        Create asset using CreateAssetFromUrl GraphQL mutation
-        
-        NOTE: This sends the video URL to backend, which streams directly from URL to GCS.
-        NO local video download happens!
+        Get signed URL from backend (like frontend getSignedUrl mutation)
         
         Args:
-            video_url: YouTube or other video URL (sent as-is, backend handles download)
+            file_name: Video file name (e.g., 'video.mp4')
             asset_name: Video title/name
             asset_description: Video description
-            category: Category string (e.g., 'Finance')
             metadata: Additional metadata dict
             
         Returns:
             dict: {
+                'upload_url': str,
                 'asset_id': str,
                 'asset_name': str,
                 'asset_description': str,
-                'message': str,
                 'error': Optional[str]
             }
         """
-        # Prepare metadata
-        if not metadata:
-            metadata = {}
-        
-        # Add category if provided (backend expects 'category' only)
-        if category:
-            metadata['category'] = category
-        
-        # GraphQL mutation
+        # GraphQL mutation (same as frontend)
         mutation = """
-        mutation CreateAssetFromUrl(
-            $videoUrl: String!
+        mutation GetSignedUrl(
+            $fileName: String!
             $assetName: String!
             $assetDescription: String!
             $metadata: JSONString
         ) {
-            createAssetFromUrl(
-                videoUrl: $videoUrl
+            getSignedUrl(
+                fileName: $fileName
                 assetName: $assetName
                 assetDescription: $assetDescription
                 metadata: $metadata
             ) {
+                uploadUrl
                 assetId
                 assetName
                 assetDescription
-                message
                 error
             }
         }
         """
         
         variables = {
-            "videoUrl": video_url,
+            "fileName": file_name,
             "assetName": asset_name,
             "assetDescription": asset_description,
             "metadata": json.dumps(metadata) if metadata else None,
@@ -100,25 +88,17 @@ class AssetCreator:
             "variables": variables
         }
         
-        # Log comparison: yt-dlp data → API payload
-        logger.debug("=" * 80)
-        logger.debug("DATA COMPARISON: yt-dlp → GraphQL API")
-        logger.debug("=" * 80)
-        logger.debug(f"[yt-dlp EXTRACTED] Title: {asset_name}, Description: {len(asset_description)} chars, Keywords: {metadata.get('keywords', [])}")
-        logger.debug(f"[GRAPHQL PAYLOAD] Endpoint: {self.backend_url}")
-        logger.debug(f"Full mutation: {json.dumps(payload, indent=2)}")
-        
-        # Dry run mode - don't make actual API calls
+        # Dry run mode
         if self.dry_run:
-            logger.info("🧪 DRY RUN: Would send GraphQL mutation (NO actual API call)")
+            logger.info("🧪 DRY RUN: Would get signed URL (NO actual API call)")
             return {
+                'upload_url': 'https://dry-run-upload-url.example.com',
                 'asset_id': 'dry-run-asset-id',
                 'asset_name': asset_name,
                 'asset_description': asset_description,
-                'message': 'Dry run mode - no asset created',
             }
         
-        # Make API call with retry logic (only if not dry_run)
+        # Make API call with retry logic
         try:
             @retry_with_backoff(max_retries=self.max_retries, exceptions=(requests.RequestException,))
             def _make_request():
@@ -127,7 +107,7 @@ class AssetCreator:
                     json=payload,
                     cookies={'JWT': self.jwt_token},
                     headers={'Content-Type': 'application/json'},
-                    timeout=600000
+                    timeout=60
                 )
             
             response = _make_request()
@@ -144,23 +124,83 @@ class AssetCreator:
                 logger.error(f"GraphQL errors: {error_msg}")
                 return {'error': error_msg}
             
-            result = data.get('data', {}).get('createAssetFromUrl', {})
+            result = data.get('data', {}).get('getSignedUrl', {})
             
             if result.get('error'):
-                logger.error(f"Asset creation failed: {result['error']}")
+                logger.error(f"Failed to get signed URL: {result['error']}")
                 return result
             
+            upload_url = result.get('uploadUrl')
             asset_id = result.get('assetId')
-            logger.info(f"✅ Asset created: {asset_id}")
+            logger.info(f"✅ Got signed URL for asset: {asset_id}")
             
             return {
+                'upload_url': upload_url,
                 'asset_id': asset_id,
                 'asset_name': result.get('assetName'),
                 'asset_description': result.get('assetDescription'),
-                'message': result.get('message'),
             }
             
         except Exception as e:
-            logger.error(f"Error creating asset: {e}", exc_info=True)
+            logger.error(f"Error getting signed URL: {e}", exc_info=True)
             return {'error': str(e)}
+    
+    def upload_file_to_signed_url(self, file_path: str, upload_url: str, content_type: Optional[str] = None) -> Dict:
+        """
+        Upload file to signed URL using PUT request (like frontend)
+        
+        Args:
+            file_path: Local path to video file
+            upload_url: Signed URL from getSignedUrl
+            content_type: MIME type (auto-detected if not provided)
+            
+        Returns:
+            dict: {
+                'success': bool,
+                'error': Optional[str]
+            }
+        """
+        import os
+        
+        if not os.path.exists(file_path):
+            return {
+                'success': False,
+                'error': f"File not found: {file_path}"
+            }
+        
+        # Auto-detect content type if not provided
+        if not content_type:
+            content_type = mimetypes.guess_type(file_path)[0] or 'video/mp4'
+        
+        if self.dry_run:
+            file_size = os.path.getsize(file_path)
+            logger.info(f"🧪 DRY RUN: Would upload file to signed URL")
+            logger.info(f"   File: {file_path} ({file_size / (1024*1024):.2f} MB)")
+            logger.info(f"   Content-Type: {content_type}")
+            return {'success': True}
+        
+        try:
+            # Upload file to signed URL (like frontend does)
+            with open(file_path, 'rb') as f:
+                response = requests.put(
+                    upload_url,
+                    data=f,
+                    headers={
+                        'Content-Type': content_type
+                    },
+                    timeout=600  # 10 minutes for large files
+                )
+            
+            if response.status_code not in [200, 204]:
+                error_msg = f"Upload failed: HTTP {response.status_code}"
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
+            
+            logger.info("✅ File uploaded to signed URL successfully")
+            return {'success': True}
+            
+        except Exception as e:
+            error_msg = f"Error uploading file: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return {'success': False, 'error': error_msg}
 

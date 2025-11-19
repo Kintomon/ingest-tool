@@ -14,7 +14,7 @@ class YouTubeProcessor:
     
     def extract_video_info(self, youtube_url: str) -> Dict:
         """
-        Extract only: title, description, keywords
+        Extract only: title, description, keywords (metadata only, no download)
         
         Returns:
             dict: {
@@ -34,7 +34,7 @@ class YouTubeProcessor:
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 # NOTE: download=False means NO video file download, only metadata
-                info = ydl.extract_info(youtube_url, download=True)
+                info = ydl.extract_info(youtube_url, download=False)
                 logger.info(json.dumps(info.get('format'), indent=2, default=str, ensure_ascii=False))
                 # logger.info(json.dumps(info.get('formats'), indent=2, default=str, ensure_ascii=False))
                 # Log raw yt-dlp video info (key fields only)
@@ -454,3 +454,60 @@ class YouTubeProcessor:
             except:
                 pass
         return 0
+    
+    def download_video(self, youtube_url: str, output_dir: str = "cache") -> str:
+        """
+        Download video file from YouTube to local directory
+        
+        Args:
+            youtube_url: YouTube video URL
+            output_dir: Directory to save video file (default: "cache")
+            
+        Returns:
+            str: Path to downloaded video file
+        """
+        # Create output directory if it doesn't exist
+        cache_dir = Path(output_dir)
+        cache_dir.mkdir(exist_ok=True)
+        
+        # Get video ID for filename
+        video_id = youtube_url.split('watch?v=')[-1].split('&')[0]
+        output_path = cache_dir / f"{video_id}.%(ext)s"
+        
+        ydl_opts = {
+            'outtmpl': str(output_path),
+            "format": "bestvideo+bestaudio/best",
+            "merge_output_format": "mp4",
+            'quiet': False,
+            'noplaylist': True,
+            'http_headers': {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Referer": "https://www.youtube.com/"
+            }
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                logger.info(f"Downloading video from: {youtube_url}")
+                # Download the video
+                ydl.download([youtube_url])
+                
+                # Get the actual downloaded file path
+                info = ydl.extract_info(youtube_url, download=False)
+                downloaded_file = ydl.prepare_filename(info)
+                
+                if not os.path.exists(downloaded_file):
+                    raise RuntimeError(f"Downloaded file not found at: {downloaded_file}")
+                
+                file_size = os.path.getsize(downloaded_file)
+                logger.info(f"✅ Video downloaded: {downloaded_file} ({file_size / (1024*1024):.2f} MB)")
+                
+                return downloaded_file
+                
+        except Exception as e:
+            logger.error(f"Error downloading video: {e}", exc_info=True)
+            raise

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)
@@ -57,10 +58,9 @@ class BatchProcessor:
     
     def process_video(self, video_url: str, category: str, dry_run: bool = False, video_only: bool = False, comments_only: bool = False, asset_id: str = None, max_items_limit: int = None) -> Dict:
         """
-        Process single video: extract info, create asset, import comments
+        Process single video: extract info, download, upload to signed URL, import comments
         
-        Note: Video is uploaded from URL directly via GraphQL mutation
-              No local download needed!
+        Works like frontend: download video → get signed URL → upload file → import comments
         
         Args:
             video_url: YouTube video URL
@@ -85,13 +85,19 @@ class BatchProcessor:
             'comments_imported': 0,
         }
         
+        downloaded_file = None
+        
         try:
-            # COMMENTS ONLY MODE: Skip video upload, just import comments to existing asset
+            # Step 1: Extract video metadata (title, description, keywords)
+            logger.info("[Step 1/5] Extracting video metadata...")
+            video_info = self.youtube_processor.extract_video_info(video_url)
+            logger.info(f"📹 Title: {video_info['title']}")
+            
+            # COMMENTS ONLY MODE: Skip video download/upload, just import comments to existing asset
             if comments_only:
-                logger.info("[Mode] COMMENTS ONLY - Skipping video upload")
+                logger.info("[Mode] COMMENTS ONLY - Skipping video download/upload")
                 if not asset_id:
                     if dry_run:
-                        # In dry_run mode, use dummy asset_id for testing
                         asset_id = "dry-run-asset-id"
                         logger.info(f"Using dummy asset_id for dry_run: {asset_id}")
                     else:
@@ -103,26 +109,54 @@ class BatchProcessor:
                 result['asset_id'] = asset_id
                 logger.info(f"Using asset_id: {asset_id}")
             
-            # NORMAL MODE or VIDEO ONLY: Upload video first
+            # NORMAL MODE or VIDEO ONLY: Download and upload video
             if not comments_only:
-                # Step 2: Create asset via GraphQL (video_info already extracted above)
-                logger.info("[Step 2/3] Creating asset via GraphQL...")
-                asset_result = self.asset_creator.create_asset_from_url(
-                    video_url=video_url,
+                # Step 2: Download video file
+                logger.info("[Step 2/5] Downloading video from YouTube...")
+                downloaded_file = self.youtube_processor.download_video(video_url, output_dir="cache")
+                
+                # Step 3: Get signed URL from backend (like frontend)
+                logger.info("[Step 3/5] Getting signed URL from backend...")
+                file_name = os.path.basename(downloaded_file)
+                signed_url_result = self.asset_creator.get_signed_url(
+                    file_name=file_name,
                     asset_name=video_info['title'],
-                    asset_description=video_info['description'],  # Full description, no truncation
-                    category=category,
+                    asset_description=video_info['description'],
                     metadata={
+                        'category': category,
                         'keywords': video_info.get('keywords', []),
                     }
                 )
                 
-                if asset_result.get('error'):
-                    result['error'] = f"Asset creation failed: {asset_result['error']}"
+                if signed_url_result.get('error'):
+                    result['error'] = f"Failed to get signed URL: {signed_url_result['error']}"
                     return result
                 
-                asset_id = asset_result['asset_id']
+                upload_url = signed_url_result['upload_url']
+                asset_id = signed_url_result['asset_id']
                 result['asset_id'] = asset_id
+                logger.info(f"✅ Got signed URL for asset: {asset_id}")
+                
+                # Step 4: Upload file to signed URL (like frontend)
+                logger.info("[Step 4/5] Uploading video file to signed URL...")
+                upload_result = self.asset_creator.upload_file_to_signed_url(
+                    file_path=downloaded_file,
+                    upload_url=upload_url
+                )
+                
+                if not upload_result.get('success'):
+                    result['error'] = f"Upload failed: {upload_result.get('error', 'Unknown error')}"
+                    return result
+                
+                logger.info("✅ Video uploaded successfully!")
+                
+                # Clean up downloaded file
+                try:
+                    if os.path.exists(downloaded_file):
+                        os.remove(downloaded_file)
+                        logger.info(f"🗑️  Cleaned up downloaded file: {downloaded_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up downloaded file: {e}")
                 
                 # VIDEO ONLY MODE: Skip comments import
                 if video_only:
@@ -131,8 +165,8 @@ class BatchProcessor:
                     logger.info("✅ Video upload complete!")
                     return result
             
-            # Step 3: Extract and import live chats first (they have timestamps)
-            logger.info("[Step 3/4] Extracting and importing live chats...")
+            # Step 5: Extract and import live chats first (they have timestamps)
+            logger.info("[Step 5/5] Extracting and importing live chats...")
             live_chats, livechat_stats = self.youtube_processor.extract_live_chat(video_url)
             
             livechat_imported = 0
@@ -160,8 +194,8 @@ class BatchProcessor:
             else:
                 logger.info("No live chat available for this video")
             
-            # Step 4: Extract and import comments (only those with timestamps)
-            logger.info("[Step 4/4] Extracting and importing comments (with timestamps only)...")
+            # Step 5 (continued): Extract and import comments (only those with timestamps)
+            logger.info("[Step 5/5] Extracting and importing comments (with timestamps only)...")
             comments, timestamp_stats = self.youtube_processor.extract_comments(video_url)
             
             # Filter comments to only include those with detected timestamps
@@ -206,6 +240,14 @@ class BatchProcessor:
         except Exception as e:
             result['error'] = str(e)
             logger.error(f"Processing failed: {e}", exc_info=True)
+        finally:
+            # Clean up downloaded file if it exists and wasn't already cleaned up
+            if downloaded_file and os.path.exists(downloaded_file):
+                try:
+                    os.remove(downloaded_file)
+                    logger.info(f"🗑️  Cleaned up downloaded file: {downloaded_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up downloaded file: {e}")
         
         return result
     

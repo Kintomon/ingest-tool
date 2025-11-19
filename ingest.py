@@ -123,7 +123,6 @@ def main():
     
     # Initialize modules
     youtube_processor = YouTubeProcessor()
-    youtube_processor.extract_video_info("https://www.youtube.com/watch?v=x-0JvQUUj6U")
     user_randomizer = UserRandomizer()
     
     asset_creator = AssetCreator(
