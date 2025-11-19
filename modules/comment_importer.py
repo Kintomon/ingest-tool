@@ -106,9 +106,6 @@ class CommentImporter:
             if incast_parent_id:
                 payload['parent_id'] = incast_parent_id
             
-            # Log payload for debugging (especially for 500 errors)
-            logger.info(f"  [{idx}/{total}] Sending payload: {json.dumps(payload, indent=2, ensure_ascii=False)}")
-            
             if self.dry_run:
                 self.imported_count += 1
                 # Generate a fake UUID for dry-run mode

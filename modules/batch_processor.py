@@ -248,6 +248,20 @@ class BatchProcessor:
                     logger.info(f"🗑️  Cleaned up downloaded file: {downloaded_file}")
                 except Exception as e:
                     logger.warning(f"Failed to clean up downloaded file: {e}")
+            
+            # Also check for and clean up any .part files for this video
+            if downloaded_file:
+                try:
+                    # Get directory and base name
+                    file_dir = os.path.dirname(downloaded_file)
+                    base_name = os.path.basename(downloaded_file)
+                    # Check for .part file
+                    part_file = os.path.join(file_dir, f"{base_name}.part")
+                    if os.path.exists(part_file):
+                        os.remove(part_file)
+                        logger.info(f"🗑️  Cleaned up partial file: {part_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up partial file: {e}")
         
         return result
     

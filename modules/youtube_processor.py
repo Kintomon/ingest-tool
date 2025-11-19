@@ -35,21 +35,6 @@ class YouTubeProcessor:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 # NOTE: download=False means NO video file download, only metadata
                 info = ydl.extract_info(youtube_url, download=False)
-                logger.info(json.dumps(info.get('format'), indent=2, default=str, ensure_ascii=False))
-                # logger.info(json.dumps(info.get('formats'), indent=2, default=str, ensure_ascii=False))
-                # Log raw yt-dlp video info (key fields only)
-                logger.info(f"[RAW yt-dlp VIDEO INFO] Available fields: {list(info.keys())}...")
-                raw_video_sample = {
-                    'title': info.get('title', ''),
-                    'description': info.get('description', ''),
-                    'tags': info.get('tags', []),
-                    'id': info.get('id', ''),
-                    'url': info.get('url', '        '),
-                    'uploader': info.get('uploader', ''),
-                    'upload_date': info.get('upload_date', ''),
-                    'duration': info.get('duration', ''),
-                }
-                logger.debug(f"Sample raw video data: {json.dumps(raw_video_sample, indent=2, default=str)}")
                 
                 video_data = {
                     'title': info.get('title', ''),
@@ -476,8 +461,7 @@ class YouTubeProcessor:
         
         ydl_opts = {
             'outtmpl': str(output_path),
-            "format": "bestvideo+bestaudio/best",
-            "merge_output_format": "mp4",
+            "format": "bestvideo[ext=webm]+bestaudio/bestvideo[ext=mp4]+bestaudio/bestvideo+bestaudio/best",
             'quiet': False,
             'noplaylist': True,
             'http_headers': {
