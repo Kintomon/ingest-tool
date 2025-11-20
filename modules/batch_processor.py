@@ -118,14 +118,19 @@ class BatchProcessor:
                 # Step 3: Get signed URL from backend (like frontend)
                 logger.info("[Step 3/5] Getting signed URL from backend...")
                 file_name = os.path.basename(downloaded_file)
+                
+                metadata_payload = {}
+                if category:
+                    metadata_payload['categories'] = [category]  # FE uses array
+                if video_info.get('keywords'):
+                    metadata_payload['preferredKeywords'] = video_info.get('keywords', []) 
+                    
+                    
                 signed_url_result = self.asset_creator.get_signed_url(
                     file_name=file_name,
                     asset_name=video_info['title'],
                     asset_description=video_info['description'],
-                    metadata={
-                        'category': category,
-                        'keywords': video_info.get('keywords', []),
-                    }
+                    metadata=metadata_payload if metadata_payload else None
                 )
                 
                 if signed_url_result.get('error'):
