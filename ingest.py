@@ -38,6 +38,7 @@ def main():
     
     # Get configuration values
     jwt_token = config.get('api.jwt_token', env_var='JWT_TOKEN') or config.get('JWT_TOKEN', '')
+    refresh_token = config.get('api.refresh_token', env_var='REFRESH_TOKEN') or config.get('REFRESH_TOKEN', '')
     backend_url = config.get('api.backend_url', 'https://api-dev.incast.ai')
     publish_url = config.get('api.publish_url', 'https://api-dev.incast.ai/publish-comment')
     list_file = config.get('processing.list_file', 'list.txt')
@@ -85,6 +86,14 @@ def main():
         
         if not validate_jwt_token(jwt_token):
             logger.warning("⚠️  JWT token format appears invalid, but continuing anyway...")
+        
+        # Warn if refresh_token is missing (recommended for long operations)
+        if not refresh_token:
+            logger.warning("⚠️  WARNING: refresh_token not configured!")
+            logger.warning("   Token refresh will not work during long operations.")
+            logger.warning("   For production use, set REFRESH_TOKEN environment variable or configure in config.yaml")
+            logger.warning("   Example: export REFRESH_TOKEN='your_refresh_token_here'")
+            logger.warning("   Get refresh_token from loginMutation response")
     else:
         # In dry_run mode, JWT is optional (we won't make API calls)
         if not jwt_token or jwt_token == 'YOUR_JWT_TOKEN_HERE':
@@ -128,6 +137,7 @@ def main():
     asset_creator = AssetCreator(
         backend_url=backend_url,
         jwt_token=jwt_token,
+        refresh_token=refresh_token if refresh_token else None,
         dry_run=dry_run,
         max_retries=max_retries
     )
@@ -135,9 +145,12 @@ def main():
     comment_importer = CommentImporter(
         publish_url=publish_url,
         jwt_token=jwt_token,
+        refresh_token=refresh_token if refresh_token else None,
         dry_run=dry_run,
         max_retries=max_retries
     )
+    # Set backend URL for token refresh capability
+    comment_importer.set_backend_url(backend_url)
     
     # Process
     try:

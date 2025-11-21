@@ -119,13 +119,13 @@ class BatchProcessor:
                 logger.info("[Step 3/5] Getting signed URL from backend...")
                 file_name = os.path.basename(downloaded_file)
                 
+                # Prepare metadata exactly like Frontend (categories array, preferredKeywords array)
                 metadata_payload = {}
                 if category:
-                    metadata_payload['categories'] = [category]  # FE uses array
+                    metadata_payload['categories'] = [category]  # Frontend uses array
                 if video_info.get('keywords'):
-                    metadata_payload['preferredKeywords'] = video_info.get('keywords', []) 
-                    
-                    
+                    metadata_payload['preferredKeywords'] = video_info.get('keywords', [])  # Frontend uses preferredKeywords
+                
                 signed_url_result = self.asset_creator.get_signed_url(
                     file_name=file_name,
                     asset_name=video_info['title'],
@@ -253,20 +253,6 @@ class BatchProcessor:
                     logger.info(f"🗑️  Cleaned up downloaded file: {downloaded_file}")
                 except Exception as e:
                     logger.warning(f"Failed to clean up downloaded file: {e}")
-            
-            # Also check for and clean up any .part files for this video
-            if downloaded_file:
-                try:
-                    # Get directory and base name
-                    file_dir = os.path.dirname(downloaded_file)
-                    base_name = os.path.basename(downloaded_file)
-                    # Check for .part file
-                    part_file = os.path.join(file_dir, f"{base_name}.part")
-                    if os.path.exists(part_file):
-                        os.remove(part_file)
-                        logger.info(f"🗑️  Cleaned up partial file: {part_file}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean up partial file: {e}")
         
         return result
     

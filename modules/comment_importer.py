@@ -4,7 +4,8 @@ import json
 import logging
 import time
 import requests
-from typing import Dict, List
+import base64
+from typing import Dict, List, Optional
 from .retry import retry_with_backoff
 
 logger = logging.getLogger(__name__)
@@ -13,22 +14,145 @@ logger = logging.getLogger(__name__)
 class CommentImporter:
     """Import comments via Cloud Function (triggers NLP processing)"""
     
-    def __init__(self, publish_url: str, jwt_token: str, dry_run: bool = False, max_retries: int = 3):
+    def __init__(self, publish_url: str, jwt_token: str, refresh_token: Optional[str] = None, dry_run: bool = False, max_retries: int = 3):
         """
         Initialize comment importer
         
         Args:
             publish_url: Cloud Function URL (e.g., 'https://api-dev.incast.ai/publish-comment')
-            jwt_token: JWT authentication token
+            jwt_token: JWT authentication token (can be updated via refresh)
+            refresh_token: Refresh token for token refresh (optional)
             dry_run: If True, don't actually make API calls
             max_retries: Maximum number of retry attempts for API calls
         """
         self.publish_url = publish_url
         self.jwt_token = jwt_token
+        self.refresh_token = refresh_token
         self.dry_run = dry_run
         self.max_retries = max_retries
         self.imported_count = 0
         self.failed_count = 0
+        self.backend_url = None  # Will be set if needed for token refresh
+    
+    def set_backend_url(self, backend_url: str):
+        """Set backend URL for token refresh"""
+        self.backend_url = backend_url.rstrip('/') + '/graphql/'
+    
+    def _decode_jwt_payload(self, token: str) -> Optional[Dict]:
+        """Decode JWT payload to get expiry"""
+        try:
+            parts = token.split('.')
+            if len(parts) < 2:
+                return None
+            
+            payload_b64 = parts[1]
+            padding = '=' * (4 - len(payload_b64) % 4)
+            payload_b64 += padding
+            
+            payload_bytes = base64.urlsafe_b64decode(payload_b64)
+            return json.loads(payload_bytes)
+        except Exception:
+            return None
+    
+    def _token_expires_soon(self, token: str, threshold_seconds: int = 900) -> bool:
+        """Check if token expires soon (15 min threshold)"""
+        payload = self._decode_jwt_payload(token)
+        if not payload or 'exp' not in payload:
+            return True
+        
+        exp_timestamp = payload['exp']
+        current_timestamp = int(time.time())
+        expires_in = exp_timestamp - current_timestamp
+        
+        return expires_in < threshold_seconds
+    
+    def _refresh_token(self) -> bool:
+        """Refresh JWT token using refreshToken mutation (requires refreshToken parameter)"""
+        if not self.backend_url:
+            logger.warning("Cannot refresh token: backend_url not set")
+            return False
+        
+        if not self.refresh_token:
+            logger.warning("Cannot refresh token: refresh_token not provided")
+            return False
+        
+        if self.dry_run:
+            logger.info("🧪 DRY RUN: Would refresh token")
+            return True
+        
+        mutation = """
+        mutation RefreshToken($refreshToken: String!) {
+            refreshToken(refreshToken: $refreshToken) {
+                token
+                payload
+                refreshToken
+                refreshExpiresIn
+            }
+        }
+        """
+        
+        variables = {
+            "refreshToken": self.refresh_token
+        }
+        
+        payload = {
+            "query": mutation,
+            "variables": variables
+        }
+        
+        try:
+            response = requests.post(
+                self.backend_url,
+                json=payload,
+                cookies={'JWT': self.jwt_token},
+                headers={'Content-Type': 'application/json'},
+                timeout=60
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Token refresh failed: HTTP {response.status_code}")
+                return False
+            
+            data = response.json()
+            
+            if 'errors' in data:
+                error_msg = data['errors'][0].get('message', 'Unknown error')
+                logger.error(f"Token refresh GraphQL errors: {error_msg}")
+                return False
+            
+            result = data.get('data', {}).get('refreshToken', {})
+            if not result:
+                logger.error("Token refresh returned no data")
+                return False
+            
+            # Update JWT token from response
+            new_token = result.get('token')
+            new_refresh_token = result.get('refreshToken')
+            
+            if new_token:
+                self.jwt_token = new_token
+                logger.info("✅ JWT token refreshed successfully")
+            else:
+                logger.warning("Token refresh: No new token in response")
+                return False
+            
+            # Update refresh token if provided
+            if new_refresh_token:
+                self.refresh_token = new_refresh_token
+                logger.info("✅ Refresh token updated")
+            
+            return True
+                
+        except Exception as e:
+            logger.error(f"Error refreshing token: {e}", exc_info=True)
+            return False
+    
+    def _ensure_valid_token(self):
+        """Check and refresh token if needed"""
+        if self._token_expires_soon(self.jwt_token):
+            logger.info("🔄 Token expires soon, refreshing before comment import...")
+            if not self._refresh_token():
+                logger.warning("⚠️  Token refresh failed, continuing with current token")
     
     def import_comments(
         self,
@@ -50,6 +174,9 @@ class CommentImporter:
         """
         pubnub_channel = f"comments_{asset_id}"
         
+        # Ensure token is valid before starting long operation
+        self._ensure_valid_token()
+        
         # Map YouTube comment IDs to InCast comment IDs
         parent_map = {}
         
@@ -57,6 +184,10 @@ class CommentImporter:
         
         # Import comments (parents first, then replies)
         total = len(comments)
+        
+        # Check token periodically during long operations (every 50 comments)
+        last_token_check = 0
+        TOKEN_CHECK_INTERVAL = 50
         
         # Only define retry wrapper if not in dry_run mode
         if not self.dry_run:
@@ -80,6 +211,13 @@ class CommentImporter:
                 return response.json()
         
         for idx, comment in enumerate(comments, 1):
+            # Periodic token refresh check during long operations
+            if idx - last_token_check >= TOKEN_CHECK_INTERVAL:
+                if self._token_expires_soon(self.jwt_token):
+                    logger.info(f"🔄 Token expires soon at comment {idx}/{total}, refreshing...")
+                    self._refresh_token()
+                last_token_check = idx
+            
             yt_id = comment.get('yt_id', f"yt_{idx}")
             youtube_parent_id = comment.get('parent_id')
             
