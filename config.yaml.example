@@ -6,8 +6,9 @@
 api:
   backend_url: "https://api-dev.incast.ai"
   publish_url: "https://api-dev.incast.ai/publish-comment"
-  jwt_token: ""  # Set via JWT_TOKEN environment variable for security
-  refresh_token: ""  # Set via REFRESH_TOKEN environment variable (required for token refresh during long operations)
+
+firebase:
+  api_key: ""  # Set via FIREBASE_API_KEY environment variable or paste from Firebase console
 
 # Processing Configuration
 processing:

@@ -8,19 +8,20 @@ Supports configuration via config.yaml and environment variables.
 
 import os
 import sys
+from getpass import getpass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from modules.config import Config
 from modules.logger_config import setup_logging
-from modules.retry import validate_jwt_token
 from modules.youtube_processor import YouTubeProcessor
 from modules.asset_creator import AssetCreator
 from modules.comment_importer import CommentImporter
 from modules.user_randomizer import UserRandomizer
 from modules.batch_processor import BatchProcessor
 from modules.cache_cleanup import cleanup_cache_files
+from modules.auth_wrapper import AuthWrapper, AuthError
 
 
 def main():
@@ -37,11 +38,10 @@ def main():
     logger = logging.getLogger(__name__)
     
     # Get configuration values
-    jwt_token = config.get('api.jwt_token', env_var='JWT_TOKEN') or config.get('JWT_TOKEN', '')
-    refresh_token = config.get('api.refresh_token', env_var='REFRESH_TOKEN') or config.get('REFRESH_TOKEN', '')
     backend_url = config.get('api.backend_url', 'https://api-dev.incast.ai')
     publish_url = config.get('api.publish_url', 'https://api-dev.incast.ai/publish-comment')
     list_file = config.get('processing.list_file', 'list.txt')
+    firebase_api_key = config.get('firebase.api_key', env_var='FIREBASE_API_KEY') or config.get('FIREBASE_API_KEY', '')
     
     dry_run = config.get_bool('modes.dry_run', False)
     video_only = config.get_bool('modes.video_only', False)
@@ -76,29 +76,11 @@ def main():
         except (ValueError, TypeError):
             max_items_limit = 10 if dry_run else None
     
-    # Validate JWT token (not required in dry_run mode)
-    if not dry_run:
-        if not jwt_token or jwt_token == 'YOUR_JWT_TOKEN_HERE':
-            logger.error("❌ JWT token not configured!")
-            logger.error("   Set JWT_TOKEN environment variable or configure in config.yaml")
-            logger.error("   Example: export JWT_TOKEN='your_token_here'")
-            sys.exit(1)
-        
-        if not validate_jwt_token(jwt_token):
-            logger.warning("⚠️  JWT token format appears invalid, but continuing anyway...")
-        
-        # Warn if refresh_token is missing (recommended for long operations)
-        if not refresh_token:
-            logger.warning("⚠️  WARNING: refresh_token not configured!")
-            logger.warning("   Token refresh will not work during long operations.")
-            logger.warning("   For production use, set REFRESH_TOKEN environment variable or configure in config.yaml")
-            logger.warning("   Example: export REFRESH_TOKEN='your_refresh_token_here'")
-            logger.warning("   Get refresh_token from loginMutation response")
-    else:
-        # In dry_run mode, JWT is optional (we won't make API calls)
-        if not jwt_token or jwt_token == 'YOUR_JWT_TOKEN_HERE':
-            logger.info("ℹ️  JWT token not set (optional in dry_run mode)")
-            jwt_token = "test-token"  # Dummy token for dry_run mode
+    # Ensure Firebase API key is provided
+    if not firebase_api_key or firebase_api_key == 'DUMMY_API_KEY':
+        logger.error("❌ Firebase API key not configured!")
+        logger.error("   Set FIREBASE_API_KEY environment variable or configure firebase.api_key in config.yaml")
+        sys.exit(1)
     
     # Check input file exists
     if not os.path.exists(list_file):
@@ -125,6 +107,25 @@ def main():
     logger.info(f"Rate limit: {rate_limit}s")
     logger.info(f"Max items limit: {max_items_limit if max_items_limit else 'all (no limit)'}")
     logger.info("=" * 80)
+
+    # Prompt for credentials
+    email = input("Enter your InCast email: ").strip()
+    password = getpass("Enter your password: ")
+
+    if not email or not password:
+        logger.error("❌ Email and password are required for authentication.")
+        sys.exit(1)
+
+    auth_wrapper = AuthWrapper(firebase_api_key=firebase_api_key, backend_url=backend_url)
+
+    try:
+        auth_result = auth_wrapper.authenticate(email=email, password=password)
+    except AuthError as exc:
+        logger.error(f"❌ Authentication failed: {exc}")
+        sys.exit(1)
+
+    jwt_token = auth_result['jwt_token']
+    refresh_token = auth_result['refresh_token']
     
     # Cleanup old cache files if enabled
     if config.get_bool('cache.enabled', True) and cache_cleanup_days > 0:

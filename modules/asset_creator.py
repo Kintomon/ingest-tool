@@ -79,7 +79,7 @@ class AssetCreator:
         
         if not self.refresh_token:
             logger.error("Cannot refresh token: refresh_token not provided")
-            logger.error("   Set refresh_token in config.yaml or get it from login response")
+            logger.error("   Authenticate via AuthWrapper to obtain backend refresh token")
             return False
         
         mutation = """

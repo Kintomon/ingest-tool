@@ -73,7 +73,7 @@ class CommentImporter:
             return False
         
         if not self.refresh_token:
-            logger.warning("Cannot refresh token: refresh_token not provided")
+            logger.warning("Cannot refresh token: refresh_token not provided (authenticate first)")
             return False
         
         if self.dry_run:
