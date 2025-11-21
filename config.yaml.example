@@ -7,7 +7,6 @@ api:
   backend_url: "https://api-dev.incast.ai"
   publish_url: "https://api-dev.incast.ai/publish-comment"
 
-# Auth Configuration
 auth:
   email: ""
   password: ""

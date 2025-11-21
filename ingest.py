@@ -108,12 +108,14 @@ def main():
     logger.info(f"Max items limit: {max_items_limit if max_items_limit else 'all (no limit)'}")
     logger.info("=" * 80)
 
-    # Prompt for credentials
-    email = input("Enter your InCast email: ").strip()
-    password = getpass("Enter your password: ")
+    # Get credentials from config
+    email = config.get('auth.email', env_var='INCAST_EMAIL')
+    password = config.get('auth.password', env_var='INCAST_PASSWORD')
 
     if not email or not password:
-        logger.error("❌ Email and password are required for authentication.")
+        logger.error("❌ Email and password not configured!")
+        logger.error("   Set auth.email and auth.password in config.yaml")
+        logger.error("   Or set INCAST_EMAIL and INCAST_PASSWORD environment variables")
         sys.exit(1)
 
     auth_wrapper = AuthWrapper(firebase_api_key=firebase_api_key, backend_url=backend_url)
