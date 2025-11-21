@@ -7,6 +7,11 @@ api:
   backend_url: "https://api-dev.incast.ai"
   publish_url: "https://api-dev.incast.ai/publish-comment"
 
+# Auth Configuration
+auth:
+  email: ""
+  password: ""
+
 firebase:
   api_key: ""  # Set via FIREBASE_API_KEY environment variable or paste from Firebase console
 

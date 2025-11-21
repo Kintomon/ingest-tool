@@ -244,7 +244,9 @@ class BatchProcessor:
             
         except Exception as e:
             result['error'] = str(e)
-            logger.error(f"Processing failed: {e}", exc_info=True)
+            result['success'] = False  # Explicitly mark as failed
+            logger.error(f"Processing failed for {video_url}: {e}")
+            # Don't raise, just return the failed result so the loop continues
         finally:
             # Clean up downloaded file if it exists and wasn't already cleaned up
             if downloaded_file and os.path.exists(downloaded_file):

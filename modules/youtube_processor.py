@@ -184,6 +184,10 @@ class YouTubeProcessor:
                     'quiet': False,
                 }
                 
+                # Check for cookies.txt
+                if os.path.exists('cookies.txt'):
+                    ydl_opts_download['cookiefile'] = 'cookies.txt'
+                
                 with yt_dlp.YoutubeDL(ydl_opts_download) as ydl_download:
                     ydl_download.download([youtube_url])
                 
@@ -473,6 +477,11 @@ class YouTubeProcessor:
                 "Referer": "https://www.youtube.com/"
             }
         }
+        
+        # Check for cookies.txt
+        if os.path.exists('cookies.txt'):
+            ydl_opts['cookiefile'] = 'cookies.txt'
+            logger.info("Using cookies.txt for download authentication")
         
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
