@@ -180,14 +180,6 @@ class CommentImporter:
         # Map YouTube comment IDs to InCast comment IDs
         parent_map = {}
         
-        def _is_ascii_comment(comment_text: str) -> bool:
-            """Check if comment contains only ASCII characters"""
-            try:
-                comment_text.encode('ascii')
-                return True
-            except UnicodeEncodeError:
-                return False
-        
         # Note: max_items_limit is applied in batch_processor before passing to this method
         
         # Import comments (parents first, then replies)
@@ -197,97 +189,6 @@ class CommentImporter:
         last_token_check = 0
         TOKEN_CHECK_INTERVAL = 50
         
-        # Only define retry wrapper if not in dry_run mode
-        if not self.dry_run:
-            def _make_request(payload_data):
-                """Make a single request without retry"""
-                response = requests.post(
-                    self.publish_url,
-                    json=payload_data,
-                    cookies={'JWT': self.jwt_token},
-                    headers={'Content-Type': 'application/json'},
-                    timeout=30
-                )
-                # Log response details for debugging
-                if response.status_code >= 400:
-                    error_text = response.text[:500]
-                    if response.status_code >= 500:
-                        logger.error(f"API Server Error ({response.status_code}): {error_text}")
-                    else:
-                        logger.debug(f"API Error Response ({response.status_code}): {error_text}")
-                response.raise_for_status()
-                return response.json()
-            
-            @retry_with_backoff(max_retries=self.max_retries, exceptions=(requests.RequestException,))
-            def _import_single_comment_non_500(payload_data):
-                """Import comment with retry (for non-500 errors)"""
-                return _make_request(payload_data)
-            
-            def _import_single_comment_with_500_handling(payload_data, comment_idx, total):
-                """Import single comment with special handling for 500 errors (retry only once)"""
-                # First attempt
-                try:
-                    response = requests.post(
-                        self.publish_url,
-                        json=payload_data,
-                        cookies={'JWT': self.jwt_token},
-                        headers={'Content-Type': 'application/json'},
-                        timeout=30
-                    )
-                    
-                    # If 500 error, handle it specially (retry only once with detailed logging)
-                    if response.status_code == 500:
-                        # Log detailed information about the failed request
-                        logger.error(f"\n{'='*80}")
-                        logger.error(f"❌ 500 Server Error at comment [{comment_idx}/{total}]")
-                        logger.error(f"{'='*80}")
-                        logger.error(f"URL: {self.publish_url}")
-                        logger.error(f"Payload:")
-                        logger.error(json.dumps(payload_data, indent=2, ensure_ascii=False))
-                        logger.error(f"Response Status: {response.status_code}")
-                        logger.error(f"Response Headers: {dict(response.headers)}")
-                        try:
-                            error_text = response.text
-                            logger.error(f"Response Body (first 2000 chars): {error_text[:2000]}")
-                        except:
-                            logger.error("Response Body: (unable to read)")
-                        logger.error(f"{'='*80}\n")
-                        
-                        # Retry once
-                        logger.warning(f"🔄 Retrying comment [{comment_idx}/{total}] after 500 error (1 retry only)...")
-                        time.sleep(2.0)  # Wait 2 seconds before retry
-                        try:
-                            retry_response = requests.post(
-                                self.publish_url,
-                                json=payload_data,
-                                cookies={'JWT': self.jwt_token},
-                                headers={'Content-Type': 'application/json'},
-                                timeout=30
-                            )
-                            if retry_response.status_code >= 400:
-                                error_text = retry_response.text[:2000]
-                                logger.error(f"❌ Retry also failed with {retry_response.status_code}: {error_text}")
-                            retry_response.raise_for_status()
-                            logger.info(f"✅ Retry successful for comment [{comment_idx}/{total}]")
-                            return retry_response.json()
-                        except Exception as retry_e:
-                            logger.error(f"❌ Retry failed for comment [{comment_idx}/{total}]: {retry_e}")
-                            raise
-                    
-                    # For non-500 errors, raise to let retry decorator handle it
-                    response.raise_for_status()
-                    return response.json()
-                    
-                except requests.HTTPError as e:
-                    # If it's a 500 error that wasn't caught above, handle it
-                    if hasattr(e, 'response') and e.response is not None and e.response.status_code == 500:
-                        raise  # Should have been handled above
-                    # For other HTTP errors, use the retry decorator
-                    return _import_single_comment_non_500(payload_data)
-                except requests.RequestException:
-                    # For other request exceptions, use the retry decorator
-                    return _import_single_comment_non_500(payload_data)
-        
         for idx, comment in enumerate(comments, 1):
             # Periodic token refresh check during long operations
             if idx - last_token_check >= TOKEN_CHECK_INTERVAL:
@@ -295,13 +196,6 @@ class CommentImporter:
                     logger.info(f"🔄 Token expires soon at comment {idx}/{total}, refreshing...")
                     self._refresh_token()
                 last_token_check = idx
-            
-            # Skip non-ASCII comments (Arabic, Chinese, etc.) to avoid backend NLP errors
-            comment_text = comment.get('comment', '')
-            if not _is_ascii_comment(comment_text):
-                logger.warning(f"⏭️  [{idx}/{total}] Skipping non-ASCII comment: {comment_text[:50]}...")
-                self.failed_count += 1
-                continue
             
             yt_id = comment.get('yt_id', f"yt_{idx}")
             youtube_parent_id = comment.get('parent_id')
@@ -350,7 +244,16 @@ class CommentImporter:
                 logger.info(f"{'='*80}\n")
             else:
                 try:
-                    response_data = _import_single_comment_with_500_handling(payload, idx, total)
+                    # Make single request without retry
+                    response = requests.post(
+                        self.publish_url,
+                        json=payload,
+                        cookies={'JWT': self.jwt_token},
+                        headers={'Content-Type': 'application/json'},
+                        timeout=30
+                    )
+                    response.raise_for_status()
+                    response_data = response.json()
                     
                     # Handle string response
                     if isinstance(response_data, str):
@@ -371,20 +274,18 @@ class CommentImporter:
                 except requests.HTTPError as e:
                     self.failed_count += 1
                     status_code = e.response.status_code if hasattr(e, 'response') else 'Unknown'
-                    error_detail = ''
-                    if hasattr(e, 'response') and e.response is not None:
-                        try:
-                            error_detail = e.response.text[:500]  # First 500 chars of error response
-                            logger.error(f"  [{idx}/{total}] HTTP {status_code} error response: {error_detail}")
-                        except:
-                            pass
-                    logger.error(f"  [{idx}/{total}] HTTP error: {status_code}")
+                    
+                    # Just log as "skipped" without detailed error
+                    comment_preview = payload['comment'][:30] if len(payload['comment']) > 30 else payload['comment']
+                    logger.info(f"⏭️  [{idx}/{total}] Skipped comment (HTTP {status_code}): {comment_preview}...")
+                    
                 except requests.RequestException as e:
                     self.failed_count += 1
-                    logger.error(f"  [{idx}/{total}] Request error: {str(e)[:200]}")
+                    logger.info(f"⏭️  [{idx}/{total}] Skipped comment (network error)")
+                    
                 except Exception as e:
                     self.failed_count += 1
-                    logger.error(f"  [{idx}/{total}] Error: {str(e)[:200]}", exc_info=True)
+                    logger.info(f"⏭️  [{idx}/{total}] Skipped comment (error)")
             
             # Rate limiting
             if idx < total:  # Don't sleep after last comment
