@@ -447,6 +447,7 @@ class YouTubeProcessor:
     def download_video(self, youtube_url: str, output_dir: str = "cache") -> str:
         """
         Download video file from YouTube to local directory
+        Uses cache to avoid re-downloading if video already exists
         
         Args:
             youtube_url: YouTube video URL
@@ -461,11 +462,29 @@ class YouTubeProcessor:
         
         # Get video ID for filename
         video_id = youtube_url.split('watch?v=')[-1].split('&')[0]
+        
+        # Check if video already exists in cache (any extension)
+        cached_files = list(cache_dir.glob(f"{video_id}.*"))
+        # Filter out non-video files (like .json cache files)
+        video_extensions = {'.mp4', '.webm', '.mkv', '.flv', '.3gp', '.avi', '.mov', '.m4v'}
+        cached_video = None
+        for cached_file in cached_files:
+            if cached_file.suffix.lower() in video_extensions:
+                cached_video = cached_file
+                break
+        
+        if cached_video and cached_video.exists():
+            file_size = os.path.getsize(cached_video)
+            logger.info(f"📂 Using cached video: {cached_video} ({file_size / (1024*1024):.2f} MB)")
+            return str(cached_video)
+        
+        # If not cached, proceed with download
         output_path = cache_dir / f"{video_id}.%(ext)s"
         
         ydl_opts = {
             'outtmpl': str(output_path),
-            "format": "bestvideo[ext=webm]+bestaudio/bestvideo[ext=mp4]+bestaudio/bestvideo+bestaudio/best",
+            # "format": "bestvideo[ext=webm]+bestaudio/bestvideo[ext=mp4]+bestaudio/bestvideo+bestaudio/best",
+            'format':"18",
             'quiet': False,
             'noplaylist': True,
             'http_headers': {

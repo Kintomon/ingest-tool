@@ -106,8 +106,9 @@ class BatchProcessor:
                         result['error'] = error_msg
                         return result
                 
+                # Use configured asset_id (required when not in dry_run)
                 result['asset_id'] = asset_id
-                logger.info(f"Using asset_id: {asset_id}")
+                logger.info(f"📌 Using configured asset_id: {asset_id}")
             
             # NORMAL MODE or VIDEO ONLY: Download and upload video
             if not comments_only:
@@ -190,9 +191,16 @@ class BatchProcessor:
                 else:
                     logger.info(f"📊 Processing {len(live_chats)} live chat messages...")
                 
+                # In comments_only mode (not dry_run), use configured asset_id from yaml
+                # Otherwise use result asset_id (from upload) or fallback to passed asset_id
+                if comments_only and not dry_run and result.get('asset_id'):
+                    target_asset_id = result['asset_id']  # Use configured asset_id from yaml
+                else:
+                    target_asset_id = result.get('asset_id') or asset_id
+                
                 livechat_stats_result = self.comment_importer.import_live_chats(
                     live_chats, 
-                    result['asset_id'] or asset_id
+                    target_asset_id
                 )
                 livechat_imported = livechat_stats_result['imported']
                 logger.info(f"✅ Live chats processed: {livechat_stats_result['imported']}/{livechat_stats_result['total']}")
@@ -229,9 +237,16 @@ class BatchProcessor:
                 else:
                     logger.info(f"📊 Processing {len(comments_with_timestamp)} comments with timestamps (filtered from {len(comments)} total)...")
                 
+                # In comments_only mode (not dry_run), use configured asset_id from yaml
+                # Otherwise use result asset_id (from upload) or fallback to passed asset_id
+                if comments_only and not dry_run and result.get('asset_id'):
+                    target_asset_id = result['asset_id']  # Use configured asset_id from yaml
+                else:
+                    target_asset_id = result.get('asset_id') or asset_id
+                
                 comment_stats = self.comment_importer.import_comments(
                     comments_with_timestamp, 
-                    result['asset_id'] or asset_id
+                    target_asset_id
                 )
                 result['comments_imported'] = comment_stats['imported']
                 logger.info(f"✅ Comments processed: {comment_stats['imported']}/{comment_stats['total']}")
