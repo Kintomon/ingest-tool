@@ -146,12 +146,12 @@ class YouTubeProcessor:
                 stats = cached_data.get('stats', {'total': 0})
                 return live_chats, stats
         
-        # Extract live chat using yt-dlp - download as VTT format
+        # Extract live chat using yt-dlp - download as JSON format
         ydl_opts = {
             'writesubtitles': True,
             'writeautomaticsub': False,
             'subtitleslangs': ['live_chat'],
-            'subtitlesformat': 'vtt',  # Download as VTT format
+            'subtitlesformat': 'json',  # Download as JSON format
             'skip_download': True,
             'no_warnings': True,
             'quiet': False,
@@ -172,12 +172,12 @@ class YouTubeProcessor:
                     logger.info("No live chat available for this video")
                     return [], stats
                 
-                # Download live chat VTT file directly to cache folder
+                # Download live chat JSON file directly to cache folder
                 ydl_opts_download = {
                     'writesubtitles': True,
                     'writeautomaticsub': False,
-                    'subtitleslangs': ['en'],
-                    'subtitlesformat': 'vtt',  # Download as VTT format
+                    'subtitleslangs': ['live_chat'],
+                    'subtitlesformat': 'json',  # Download as JSON format
                     'skip_download': True,
                     'outtmpl': str(cache_dir / '%(id)s.%(ext)s'),
                     'no_warnings': True,
@@ -191,18 +191,18 @@ class YouTubeProcessor:
                 with yt_dlp.YoutubeDL(ydl_opts_download) as ydl_download:
                     ydl_download.download([youtube_url])
                 
-                # Look for live chat VTT file in cache folder
-                live_chat_files = list(cache_dir.glob(f"{video_id}.en.vtt"))
+                # Look for live chat JSON file in cache folder
+                live_chat_files = list(cache_dir.glob(f"{video_id}.live_chat.json"))
                 
                 if live_chat_files:
                     live_chat_file = live_chat_files[0]
-                    logger.info(f"Found live chat VTT file: {live_chat_file}")
+                    logger.info(f"Found live chat JSON file: {live_chat_file}")
                     
-                    # Parse VTT file
-                    live_chats = self._parse_vtt_live_chat(live_chat_file)
+                    # Parse JSON file (line by line)
+                    live_chats = self._parse_json_live_chat(live_chat_file)
                     stats['total'] = len(live_chats)
                 else:
-                    logger.debug("Live chat VTT file not found after download attempt")
+                    logger.debug("Live chat JSON file not found after download attempt")
                 
                 # Save to cache
                 if live_chats:
@@ -219,82 +219,94 @@ class YouTubeProcessor:
             # Live chat might not be available, which is fine
             return [], stats
     
-    def _parse_vtt_live_chat(self, vtt_file: Path) -> List[Dict]:
+    def _parse_json_live_chat(self, json_file: Path) -> List[Dict]:
         """
-        Parse VTT format live chat file
+        Parse JSON format live chat file (one JSON object per line)
         
-        VTT format:
-        00:08:39.050 --> 00:08:44.010
-        Author Name:
-        Message text here
+        Each line contains:
+        - replayChatItemAction.videoOffsetTimeMsec: video offset in milliseconds
+        - replayChatItemAction.actions[0].addChatItemAction.item.liveChatTextMessageRenderer:
+          - message.runs[]: array of text/emoji objects (only extract 'text', skip 'emoji')
+          - authorName.simpleText: author name
+          - id or clientId: message ID
         
         Returns:
             List of live chat message dicts
         """
-        import re
-        
         live_chats = []
         
-        with open(vtt_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Split by double newlines to get cue blocks
-        # Skip WEBVTT header
-        blocks = re.split(r'\n\n+', content)
-        
-        for block in blocks:
-            block = block.strip()
-            if not block or block.startswith('WEBVTT') or block.startswith('Kind:') or block.startswith('Language:'):
-                continue
-            
-            lines = block.split('\n')
-            if len(lines) < 2:
-                continue
-            
-            # First line should be timestamp: "00:08:39.050 --> 00:08:44.010"
-            timestamp_line = lines[0].strip()
-            timestamp_match = re.match(r'(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*', timestamp_line)
-            
-            if not timestamp_match:
-                continue
-            
-            # Convert timestamp to seconds
-            hours, minutes, seconds, milliseconds = map(int, timestamp_match.groups())
-            timestamp_seconds = hours * 3600 + minutes * 60 + seconds
-            
-            # Next line(s) contain author and message
-            # Format: "Author Name:\nMessage text" or "Author Name:\nMessage line 1\nMessage line 2"
-            if len(lines) < 2:
-                continue
-            
-            # First line after timestamp is usually the author
-            first_content_line = lines[1].strip()
-            author = 'Unknown'
-            message_lines = []
-            
-            # Check if first line is author (ends with colon)
-            if first_content_line.endswith(':'):
-                author = first_content_line[:-1].strip()
-                message_lines = lines[2:]  # Rest are message lines
-            else:
-                # No author line, all content is message
-                message_lines = lines[1:]
-            
-            message = '\n'.join(message_lines).strip()
-            
-            if not message:
-                continue
-            
-            live_chat_msg = {
-                'comment': message,
-                'user_name': author,
-                'created_by_id': '',
-                'profile_picture': '',  # VTT doesn't have profile pictures
-                'commented_at': str(timestamp_seconds),
-                'yt_id': f"livechat_{len(live_chats)}",
-                'parent_id': None,
-            }
-            live_chats.append(live_chat_msg)
+        with open(json_file, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                # Skip first line
+                if line_num == 1:
+                    continue
+                
+                line = line.strip()
+                if not line:
+                    continue
+                
+                try:
+                    data = json.loads(line)
+                    
+                    # Extract videoOffsetTimeMsec from replayChatItemAction
+                    replay_chat_item_action = data.get('replayChatItemAction', {})
+                    video_offset_msec_str = replay_chat_item_action.get('videoOffsetTimeMsec', '0')
+                    
+                    # Convert milliseconds to seconds
+                    try:
+                        video_offset_msec = int(video_offset_msec_str)
+                        timestamp_seconds = video_offset_msec // 1000
+                    except (ValueError, TypeError):
+                        timestamp_seconds = 0
+                    
+                    # Extract actions
+                    actions = replay_chat_item_action.get('actions', [])
+                    if not actions:
+                        continue
+                    
+                    # Get first action's addChatItemAction
+                    add_chat_item_action = actions[0].get('addChatItemAction', {})
+                    item = add_chat_item_action.get('item', {})
+                    
+                    # Handle liveChatTextMessageRenderer
+                    text_message_renderer = item.get('liveChatTextMessageRenderer')
+                    if not text_message_renderer:
+                        # Skip non-text messages (e.g., viewer engagement messages)
+                        continue
+                    
+                    # Extract message text from runs (only 'text', skip 'emoji')
+                    message_runs = text_message_renderer.get('message', {}).get('runs', [])
+                    message_text_parts = []
+                    for run in message_runs:
+                        if 'text' in run:
+                            message_text_parts.append(run['text'])
+                        # Skip emoji objects (don't handle them)
+                    
+                    message_text = ''.join(message_text_parts).strip()
+                    if not message_text:
+                        continue
+                    
+                    # Extract author name
+                    author_name = text_message_renderer.get('authorName', {}).get('simpleText', 'Unknown')
+                    
+                    # Extract message ID
+                    message_id = text_message_renderer.get('id') or add_chat_item_action.get('clientId', f"livechat_{len(live_chats)}")
+                    
+                    live_chat_msg = {
+                        'comment': message_text,
+                        'user_name': author_name,
+                        'created_by_id': '',
+                        'profile_picture': '',  # Don't use profile picture
+                        'commented_at': str(timestamp_seconds),
+                        'yt_id': message_id,
+                        'parent_id': None,
+                    }
+                    live_chats.append(live_chat_msg)
+                    
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Line {line_num}: Error parsing live chat JSON: {e} - Line content: {line[:200]}...")
+                except Exception as e:
+                    logger.warning(f"Line {line_num}: Unexpected error processing live chat JSON: {e} - Line content: {line[:200]}...")
         
         return live_chats
     
