@@ -180,6 +180,14 @@ class CommentImporter:
         # Map YouTube comment IDs to InCast comment IDs
         parent_map = {}
         
+        def _is_ascii_comment(comment_text: str) -> bool:
+            """Check if comment contains only ASCII characters"""
+            try:
+                comment_text.encode('ascii')
+                return True
+            except UnicodeEncodeError:
+                return False
+        
         # Note: max_items_limit is applied in batch_processor before passing to this method
         
         # Import comments (parents first, then replies)
@@ -287,6 +295,13 @@ class CommentImporter:
                     logger.info(f"🔄 Token expires soon at comment {idx}/{total}, refreshing...")
                     self._refresh_token()
                 last_token_check = idx
+            
+            # Skip non-ASCII comments (Arabic, Chinese, etc.) to avoid backend NLP errors
+            comment_text = comment.get('comment', '')
+            if not _is_ascii_comment(comment_text):
+                logger.warning(f"⏭️  [{idx}/{total}] Skipping non-ASCII comment: {comment_text[:50]}...")
+                self.failed_count += 1
+                continue
             
             yt_id = comment.get('yt_id', f"yt_{idx}")
             youtube_parent_id = comment.get('parent_id')
