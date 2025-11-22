@@ -211,11 +211,38 @@ class BatchProcessor:
             logger.info("[Step 5/5] Extracting and importing comments (with timestamps only)...")
             comments, timestamp_stats = self.youtube_processor.extract_comments(video_url)
             
-            # Filter comments to only include those with detected timestamps
-            comments_with_timestamp = [
-                comment for comment in comments 
-                if int(comment.get('commented_at', '0') or '0') > 0
-            ]
+            # Filter comments to include:
+            # 1. Comments with timestamps
+            # 2. Parent comments of replies that have timestamps (parent inherits reply's timestamp)
+            comments_with_timestamp = []
+            parent_ids_needed = {}  # Maps parent_id -> timestamp to inherit
+            
+            # First pass: identify all comments with timestamps and collect their parent IDs
+            for comment in comments:
+                timestamp = int(comment.get('commented_at', '0') or '0')
+                if timestamp > 0:
+                    comments_with_timestamp.append(comment)
+                    # If this comment is a reply, its parent needs the same timestamp
+                    parent_id = comment.get('parent_id')
+                    if parent_id:
+                        # Use the earliest timestamp if multiple replies
+                        if parent_id not in parent_ids_needed or timestamp < parent_ids_needed[parent_id]:
+                            parent_ids_needed[parent_id] = timestamp
+            
+            # Second pass: add parent comments that are needed (inherit timestamp from reply)
+            yt_ids_in_list = {c.get('yt_id') for c in comments_with_timestamp}
+            for comment in comments:
+                yt_id = comment.get('yt_id')
+                # If this comment is a needed parent and not already in the list
+                if yt_id in parent_ids_needed and yt_id not in yt_ids_in_list:
+                    # Inherit the timestamp from the reply
+                    comment['commented_at'] = str(parent_ids_needed[yt_id])
+                    comments_with_timestamp.append(comment)
+                    yt_ids_in_list.add(yt_id)
+            
+            # Sort to ensure parents come before replies (by original order in comments list)
+            comment_order = {c.get('yt_id'): idx for idx, c in enumerate(comments)}
+            comments_with_timestamp.sort(key=lambda c: comment_order.get(c.get('yt_id'), 0))
             
             # Store timestamp stats in result
             result['timestamp_stats'] = timestamp_stats

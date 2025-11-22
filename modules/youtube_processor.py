@@ -75,10 +75,11 @@ class YouTubeProcessor:
                 cached_data = json.load(f)
                 raw_comments_data = cached_data['comments']  # Raw unprocessed comments
                 
-                # Process cached raw comments
+                # Process cached comments (flat format with "parent" field)
                 comments = []
                 stats = {'with_timestamp': 0, 'without_timestamp': 0, 'total': 0, 'with_replies': 0}
-                self._process_comments_recursive(raw_comments_data, comments, stats, parent_id=None, raw_data=None)
+                self._process_flat_comments(raw_comments_data, comments, stats)
+                
                 return comments, stats
         
         # Extract comments if no cache
@@ -96,19 +97,19 @@ class YouTubeProcessor:
                 # Extract comments with getcomments=True
                 info = ydl.extract_info(youtube_url, download=False)
                 
-                # Get comments from yt-dlp response
+                # Get comments from yt-dlp response (already flat format with "parent" field)
                 comment_entries = info.get('comments', [])
                 
                 # Count comments and timestamps
                 stats = {'with_timestamp': 0, 'without_timestamp': 0, 'total': 0, 'with_replies': 0}
                 
-                # Process comments recursively (parent, then replies)
-                self._process_comments_recursive(comment_entries, comments, stats, parent_id=None, raw_data=raw_comments_data)
+                # Process flat comments
+                self._process_flat_comments(comment_entries, comments, stats)
                 
-                # Save UNPROCESSED raw comments to cache (for next time to avoid yt-dlp call)
+                # Save raw comments to cache
                 logger.info(f"💾 Saving raw comments to cache: {cache_file}")
                 with open(cache_file, 'w') as f:
-                    json.dump({'comments': raw_comments_data, 'stats': stats}, f, indent=2)
+                    json.dump({'comments': comment_entries, 'stats': stats}, f, indent=2)
                 
                 # Return comments and timestamp stats
                 return comments, {
@@ -239,12 +240,12 @@ class YouTubeProcessor:
             for line_num, line in enumerate(f, 1):
                 # Skip first line
                 if line_num == 1:
-                    continue
-                
+                continue
+            
                 line = line.strip()
                 if not line:
-                    continue
-                
+                continue
+            
                 try:
                     data = json.loads(line)
                     
@@ -262,8 +263,8 @@ class YouTubeProcessor:
                     # Extract actions
                     actions = replay_chat_item_action.get('actions', [])
                     if not actions:
-                        continue
-                    
+                continue
+            
                     # Get first action's addChatItemAction
                     add_chat_item_action = actions[0].get('addChatItemAction', {})
                     item = add_chat_item_action.get('item', {})
@@ -272,8 +273,8 @@ class YouTubeProcessor:
                     text_message_renderer = item.get('liveChatTextMessageRenderer')
                     if not text_message_renderer:
                         # Skip non-text messages (e.g., viewer engagement messages)
-                        continue
-                    
+                continue
+            
                     # Extract message text from runs (only 'text', skip 'emoji')
                     message_runs = text_message_renderer.get('message', {}).get('runs', [])
                     message_text_parts = []
@@ -284,24 +285,24 @@ class YouTubeProcessor:
                     
                     message_text = ''.join(message_text_parts).strip()
                     if not message_text:
-                        continue
-                    
+                continue
+            
                     # Extract author name
                     author_name = text_message_renderer.get('authorName', {}).get('simpleText', 'Unknown')
                     
                     # Extract message ID
                     message_id = text_message_renderer.get('id') or add_chat_item_action.get('clientId', f"livechat_{len(live_chats)}")
                     
-                    live_chat_msg = {
+            live_chat_msg = {
                         'comment': message_text,
                         'user_name': author_name,
-                        'created_by_id': '',
+                'created_by_id': '',
                         'profile_picture': '',  # Don't use profile picture
-                        'commented_at': str(timestamp_seconds),
+                'commented_at': str(timestamp_seconds),
                         'yt_id': message_id,
-                        'parent_id': None,
-                    }
-                    live_chats.append(live_chat_msg)
+                'parent_id': None,
+            }
+            live_chats.append(live_chat_msg)
                     
                 except json.JSONDecodeError as e:
                     logger.warning(f"Line {line_num}: Error parsing live chat JSON: {e} - Line content: {line[:200]}...")
@@ -310,33 +311,34 @@ class YouTubeProcessor:
         
         return live_chats
     
-    def _process_comments_recursive(
+    def _process_flat_comments(
         self, 
         comment_entries: List[Dict], 
         comments: List[Dict], 
-        stats: Dict,
-        parent_id: str = None,
-        raw_data: List[Dict] = None
+        stats: Dict
     ):
         """
-        Process comments: parent first, then replies (2 levels only)
+        Process flat comment format (from .info.json with "parent" field)
+        Builds parent-reply relationships and ensures parent-first ordering
         """
-        if raw_data is None:
-            raw_data = []
+        # Separate parents and replies
+        parent_comments = []
+        reply_comments = []
+        parent_map = {}  # Maps parent YouTube ID to its index
         
         for raw_comment in comment_entries:
+            parent_field = raw_comment.get('parent', 'root')
             
-            # Store raw comment data (UNPROCESSED) for cache
-            raw_data.append(raw_comment)
-            
-            # Log raw comment (debug level)
-            logger.debug(f"Raw comment: {json.dumps(raw_comment, indent=2, default=str, ensure_ascii=False)}")
-            
-            # Extract video timeline position from comment text
+            if parent_field == 'root':
+                parent_comments.append(raw_comment)
+            else:
+                reply_comments.append(raw_comment)
+        
+        # Process parent comments first
+        for raw_comment in parent_comments:
             comment_text = raw_comment.get('text', '')
             commented_at = self._extract_timestamp(comment_text)
             
-            # Remove timestamp strings from comment text (e.g., "22:03", "at 1:30")
             if commented_at > 0:
                 comment_text = self._remove_timestamp_from_text(comment_text)
                 stats['with_timestamp'] += 1
@@ -345,38 +347,63 @@ class YouTubeProcessor:
             
             stats['total'] += 1
             
+            yt_id = raw_comment.get('id', '')
+            parent_map[yt_id] = len(comments)  # Store index for reply lookup
+            
             mapped_comment = {
-                'comment': comment_text.strip(),  # Clean comment text
+                'comment': comment_text.strip(),
                 'user_name': raw_comment.get('author', 'Unknown User'),
                 'created_by_id': '',
                 'profile_picture': raw_comment.get('author_thumbnail', ''),
-                'commented_at': str(commented_at),  # Seconds as string (e.g., "1323")
-                'yt_id': raw_comment.get('id', ''),
-                'parent_id': parent_id,  # Set parent_id for replies
+                'commented_at': str(commented_at),
+                'yt_id': yt_id,
+                'parent_id': None,  # Top-level comment
             }
             
             comments.append(mapped_comment)
+        
+        # Process reply comments
+        for raw_comment in reply_comments:
+            comment_text = raw_comment.get('text', '')
+            commented_at = self._extract_timestamp(comment_text)
             
-            # Process replies if exists (replies don't have replies)
-            if 'replies' in raw_comment and raw_comment.get('replies'):
-                stats['with_replies'] += 1
-                replies = raw_comment['replies']
-                reply_list = []
-                
-                if isinstance(replies, dict) and 'comments' in replies:
-                    reply_list = replies['comments']
-                elif isinstance(replies, list):
-                    reply_list = replies
-                
-                if reply_list:
-                    # Process replies
-                    self._process_comments_recursive(
-                        reply_list, 
-                        comments, 
-                        stats, 
-                        parent_id=raw_comment.get('id', ''),
-                        raw_data=raw_data
-                    )
+            if commented_at > 0:
+                comment_text = self._remove_timestamp_from_text(comment_text)
+                stats['with_timestamp'] += 1
+            else:
+                stats['without_timestamp'] += 1
+            
+            stats['total'] += 1
+            
+            # Get parent YouTube ID
+            parent_yt_id = raw_comment.get('parent', '')
+            
+            # Mark parent as having replies (count once per unique parent)
+            if parent_yt_id in parent_map:
+                parent_idx = parent_map[parent_yt_id]
+                # Only count parent once (check if we've seen this parent before)
+                if not hasattr(self, '_parents_with_replies'):
+                    self._parents_with_replies = set()
+                if parent_yt_id not in self._parents_with_replies:
+                    stats['with_replies'] += 1
+                    self._parents_with_replies.add(parent_yt_id)
+            
+            mapped_comment = {
+                'comment': comment_text.strip(),
+                'user_name': raw_comment.get('author', 'Unknown User'),
+                'created_by_id': '',
+                'profile_picture': raw_comment.get('author_thumbnail', ''),
+                'commented_at': str(commented_at),
+                'yt_id': raw_comment.get('id', ''),
+                'parent_id': parent_yt_id,  # Set parent's YouTube ID
+            }
+            
+            comments.append(mapped_comment)
+        
+        # Clean up tracking set
+        if hasattr(self, '_parents_with_replies'):
+            delattr(self, '_parents_with_replies')
+    
     
     @staticmethod
     def _extract_timestamp(text: str) -> int:
