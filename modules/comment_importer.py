@@ -191,8 +191,8 @@ class CommentImporter:
         
         # Only define retry wrapper if not in dry_run mode
         if not self.dry_run:
-            @retry_with_backoff(max_retries=self.max_retries, exceptions=(requests.RequestException,))
-            def _import_single_comment(payload_data):
+            def _make_request(payload_data):
+                """Make a single request without retry"""
                 response = requests.post(
                     self.publish_url,
                     json=payload_data,
@@ -200,7 +200,7 @@ class CommentImporter:
                     headers={'Content-Type': 'application/json'},
                     timeout=30
                 )
-                # Log response details for debugging (especially 500 errors)
+                # Log response details for debugging
                 if response.status_code >= 400:
                     error_text = response.text[:500]
                     if response.status_code >= 500:
@@ -209,6 +209,76 @@ class CommentImporter:
                         logger.debug(f"API Error Response ({response.status_code}): {error_text}")
                 response.raise_for_status()
                 return response.json()
+            
+            @retry_with_backoff(max_retries=self.max_retries, exceptions=(requests.RequestException,))
+            def _import_single_comment_non_500(payload_data):
+                """Import comment with retry (for non-500 errors)"""
+                return _make_request(payload_data)
+            
+            def _import_single_comment_with_500_handling(payload_data, comment_idx, total):
+                """Import single comment with special handling for 500 errors (retry only once)"""
+                # First attempt
+                try:
+                    response = requests.post(
+                        self.publish_url,
+                        json=payload_data,
+                        cookies={'JWT': self.jwt_token},
+                        headers={'Content-Type': 'application/json'},
+                        timeout=30
+                    )
+                    
+                    # If 500 error, handle it specially (retry only once with detailed logging)
+                    if response.status_code == 500:
+                        # Log detailed information about the failed request
+                        logger.error(f"\n{'='*80}")
+                        logger.error(f"❌ 500 Server Error at comment [{comment_idx}/{total}]")
+                        logger.error(f"{'='*80}")
+                        logger.error(f"URL: {self.publish_url}")
+                        logger.error(f"Payload:")
+                        logger.error(json.dumps(payload_data, indent=2, ensure_ascii=False))
+                        logger.error(f"Response Status: {response.status_code}")
+                        logger.error(f"Response Headers: {dict(response.headers)}")
+                        try:
+                            error_text = response.text
+                            logger.error(f"Response Body (first 2000 chars): {error_text[:2000]}")
+                        except:
+                            logger.error("Response Body: (unable to read)")
+                        logger.error(f"{'='*80}\n")
+                        
+                        # Retry once
+                        logger.warning(f"🔄 Retrying comment [{comment_idx}/{total}] after 500 error (1 retry only)...")
+                        time.sleep(2.0)  # Wait 2 seconds before retry
+                        try:
+                            retry_response = requests.post(
+                                self.publish_url,
+                                json=payload_data,
+                                cookies={'JWT': self.jwt_token},
+                                headers={'Content-Type': 'application/json'},
+                                timeout=30
+                            )
+                            if retry_response.status_code >= 400:
+                                error_text = retry_response.text[:2000]
+                                logger.error(f"❌ Retry also failed with {retry_response.status_code}: {error_text}")
+                            retry_response.raise_for_status()
+                            logger.info(f"✅ Retry successful for comment [{comment_idx}/{total}]")
+                            return retry_response.json()
+                        except Exception as retry_e:
+                            logger.error(f"❌ Retry failed for comment [{comment_idx}/{total}]: {retry_e}")
+                            raise
+                    
+                    # For non-500 errors, raise to let retry decorator handle it
+                    response.raise_for_status()
+                    return response.json()
+                    
+                except requests.HTTPError as e:
+                    # If it's a 500 error that wasn't caught above, handle it
+                    if hasattr(e, 'response') and e.response is not None and e.response.status_code == 500:
+                        raise  # Should have been handled above
+                    # For other HTTP errors, use the retry decorator
+                    return _import_single_comment_non_500(payload_data)
+                except requests.RequestException:
+                    # For other request exceptions, use the retry decorator
+                    return _import_single_comment_non_500(payload_data)
         
         for idx, comment in enumerate(comments, 1):
             # Periodic token refresh check during long operations
@@ -265,7 +335,7 @@ class CommentImporter:
                 logger.info(f"{'='*80}\n")
             else:
                 try:
-                    response_data = _import_single_comment(payload)
+                    response_data = _import_single_comment_with_500_handling(payload, idx, total)
                     
                     # Handle string response
                     if isinstance(response_data, str):
