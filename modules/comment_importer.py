@@ -133,8 +133,14 @@ class CommentImporter:
                 self.jwt_token = new_token
                 logger.info("✅ JWT token refreshed successfully")
             else:
-                logger.warning("Token refresh: No new token in response")
-                return False
+                # Try to get from cookies as fallback (backend has JWT_HIDE_TOKEN_FIELDS=True)
+                new_cookies = response.cookies
+                if 'JWT' in new_cookies:
+                    self.jwt_token = new_cookies['JWT']
+                    logger.info("✅ JWT token refreshed from cookies")
+                else:
+                    logger.warning("Token refresh: No new token in response")
+                    return False
             
             # Update refresh token if provided
             if new_refresh_token:

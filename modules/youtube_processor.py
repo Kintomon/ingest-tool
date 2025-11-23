@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List
 import json
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -324,7 +325,7 @@ class YouTubeProcessor:
         # Separate parents and replies
         parent_comments = []
         reply_comments = []
-        parent_map = {}  # Maps parent YouTube ID to its index
+        parents_with_replies = set()  # Track which parents have replies
         
         for raw_comment in comment_entries:
             parent_field = raw_comment.get('parent', 'root')
@@ -333,6 +334,11 @@ class YouTubeProcessor:
                 parent_comments.append(raw_comment)
             else:
                 reply_comments.append(raw_comment)
+                # Mark this parent as having replies
+                parents_with_replies.add(parent_field)
+        
+        # Count unique parents with replies
+        stats['with_replies'] = len(parents_with_replies)
         
         # Process parent comments first
         for raw_comment in parent_comments:
@@ -348,7 +354,6 @@ class YouTubeProcessor:
             stats['total'] += 1
             
             yt_id = raw_comment.get('id', '')
-            parent_map[yt_id] = len(comments)  # Store index for reply lookup
             
             mapped_comment = {
                 'comment': comment_text.strip(),
@@ -378,16 +383,6 @@ class YouTubeProcessor:
             # Get parent YouTube ID
             parent_yt_id = raw_comment.get('parent', '')
             
-            # Mark parent as having replies (count once per unique parent)
-            if parent_yt_id in parent_map:
-                parent_idx = parent_map[parent_yt_id]
-                # Only count parent once (check if we've seen this parent before)
-                if not hasattr(self, '_parents_with_replies'):
-                    self._parents_with_replies = set()
-                if parent_yt_id not in self._parents_with_replies:
-                    stats['with_replies'] += 1
-                    self._parents_with_replies.add(parent_yt_id)
-            
             mapped_comment = {
                 'comment': comment_text.strip(),
                 'user_name': raw_comment.get('author', 'Unknown User'),
@@ -399,10 +394,6 @@ class YouTubeProcessor:
             }
             
             comments.append(mapped_comment)
-        
-        # Clean up tracking set
-        if hasattr(self, '_parents_with_replies'):
-            delattr(self, '_parents_with_replies')
     
     
     @staticmethod
@@ -412,7 +403,6 @@ class YouTubeProcessor:
         Looks for patterns like: "at 1:30", "2:45", "10:15:30", etc.
         Returns 0 if no timestamp found
         """
-        import re
         
         patterns = [
             r'(?:at|@)\s*(\d{1,2}):(\d{2})(?::(\d{2}))?',  # "at 1:30" or "at 10:15:30"
@@ -440,7 +430,6 @@ class YouTubeProcessor:
         Remove timestamp patterns from comment text
         Removes patterns like: "at 1:30", "22:03", "10:15:30", etc.
         """
-        import re
         
         # Patterns to remove (same as extraction patterns)
         patterns = [
@@ -465,8 +454,6 @@ class YouTubeProcessor:
         if isinstance(timestamp_value, (int, float)):
             return int(timestamp_value)
         elif isinstance(timestamp_value, str):
-            # Try to parse string like "1:30" or "90"
-            import re
             match = re.match(r'(\d{1,2}):(\d{2})(?::(\d{2}))?', timestamp_value)
             if match:
                 groups = match.groups()

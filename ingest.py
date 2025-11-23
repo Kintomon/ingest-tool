@@ -65,6 +65,7 @@ def main():
     max_retries = config.get_int('processing.max_retries', 3)
     rate_limit = config.get_float('processing.rate_limit', 0.5)
     cache_cleanup_days = config.get_int('cache.cleanup_after_days', 30)
+    skip_live_chat = config.get_bool('processing.skip_live_chat', False)
     
     # Get max items limit (default to 10 in dry_run, "all" otherwise)
     max_items_limit = config.get('processing.max_items_limit', '10' if dry_run else 'all')
@@ -108,15 +109,21 @@ def main():
     logger.info(f"Max items limit: {max_items_limit if max_items_limit else 'all (no limit)'}")
     logger.info("=" * 80)
 
-    # Get credentials from config
-    email = config.get('auth.email', env_var='INCAST_EMAIL')
-    password = config.get('auth.password', env_var='INCAST_PASSWORD')
-
-    if not email or not password:
-        logger.error("❌ Email and password not configured!")
-        logger.error("   Set auth.email and auth.password in config.yaml")
-        logger.error("   Or set INCAST_EMAIL and INCAST_PASSWORD environment variables")
+    # Prompt user for credentials
+    logger.info("\n🔐 Authentication Required")
+    logger.info("=" * 80)
+    
+    email = input("Email: ").strip()
+    if not email:
+        logger.error("❌ Email is required!")
         sys.exit(1)
+    
+    password = getpass("Password: ").strip()
+    if not password:
+        logger.error("❌ Password is required!")
+        sys.exit(1)
+    
+    logger.info("=" * 80 + "\n")
 
     auth_wrapper = AuthWrapper(firebase_api_key=firebase_api_key, backend_url=backend_url)
 
@@ -171,7 +178,8 @@ def main():
             video_only=video_only, 
             comments_only=comments_only,
             max_items_limit=max_items_limit,
-            asset_id=asset_id
+            asset_id=asset_id,
+            skip_live_chat=skip_live_chat
         )
         
         if dry_run:

@@ -1,15 +1,12 @@
 # InCast Ingestion Tool Configuration
 # Copy this file to config.yaml and update with your values
 # Environment variables take precedence over this file
+# Authentication: Email and password will be prompted at runtime
 
 # API Configuration
 api:
   backend_url: "https://api-dev.incast.ai"
   publish_url: "https://api-dev.incast.ai/publish-comment"
-
-auth:
-  email: ""
-  password: ""
 
 firebase:
   api_key: ""  # Set via FIREBASE_API_KEY environment variable or paste from Firebase console
@@ -22,6 +19,7 @@ processing:
   max_retries: 3  # API call retry attempts
   retry_delay: 1.0  # Initial retry delay in seconds
   max_items_limit: "all"  # Limit items to process: "all" or number (e.g., 10, 50, 100). In dry_run mode defaults to 10.
+  skip_live_chat: false  # Skip live chat extraction (only process comments)
 
 # Mode Configuration
 modes:

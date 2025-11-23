@@ -56,7 +56,7 @@ class BatchProcessor:
         logger.info(f"📋 Loaded {len(videos)} videos from {file_path}")
         return videos
     
-    def process_video(self, video_url: str, category: str, dry_run: bool = False, video_only: bool = False, comments_only: bool = False, asset_id: str = None, max_items_limit: int = None) -> Dict:
+    def process_video(self, video_url: str, category: str, dry_run: bool = False, video_only: bool = False, comments_only: bool = False, asset_id: str = None, max_items_limit: int = None, skip_live_chat: bool = False) -> Dict:
         """
         Process single video: extract info, download, upload to signed URL, import comments
         
@@ -70,6 +70,7 @@ class BatchProcessor:
             comments_only: If True, only import comments (skip video upload)
             asset_id: Required if comments_only=True, existing asset ID to import comments to
             max_items_limit: Maximum number of items to process (None = all, number = limit)
+            skip_live_chat: If True, skip live chat extraction
         """
         logger.info("=" * 80)
         logger.info(f"🎬 Processing: {video_url}")
@@ -172,40 +173,44 @@ class BatchProcessor:
                     return result
             
             # Step 5: Extract and import live chats first (they have timestamps)
-            logger.info("[Step 5/5] Extracting and importing live chats...")
-            live_chats, livechat_stats = self.youtube_processor.extract_live_chat(video_url)
-            
             livechat_imported = 0
-            if live_chats:
-                # Apply max_items_limit if set
-                original_count = len(live_chats)
-                if max_items_limit and max_items_limit > 0 and original_count > max_items_limit:
-                    live_chats = live_chats[:max_items_limit]
-                    logger.info(f"📊 Limiting live chats to first {max_items_limit} (out of {original_count} total)")
-                
-                # Anonymize live chat users
-                live_chats = self.user_randomizer.anonymize_comments(live_chats)
-                
-                if dry_run:
-                    logger.info(f"📊 DRY RUN: Found {len(live_chats)} live chat messages (showing import-ready data)...")
-                else:
-                    logger.info(f"📊 Processing {len(live_chats)} live chat messages...")
-                
-                # In comments_only mode (not dry_run), use configured asset_id from yaml
-                # Otherwise use result asset_id (from upload) or fallback to passed asset_id
-                if comments_only and not dry_run and result.get('asset_id'):
-                    target_asset_id = result['asset_id']  # Use configured asset_id from yaml
-                else:
-                    target_asset_id = result.get('asset_id') or asset_id
-                
-                livechat_stats_result = self.comment_importer.import_live_chats(
-                    live_chats, 
-                    target_asset_id
-                )
-                livechat_imported = livechat_stats_result['imported']
-                logger.info(f"✅ Live chats processed: {livechat_stats_result['imported']}/{livechat_stats_result['total']}")
+            
+            if skip_live_chat:
+                logger.info("[Step 5/5] Skipping live chat extraction (skip_live_chat=true)")
             else:
-                logger.info("No live chat available for this video")
+                logger.info("[Step 5/5] Extracting and importing live chats...")
+                live_chats, livechat_stats = self.youtube_processor.extract_live_chat(video_url)
+            
+                if live_chats:
+                    # Apply max_items_limit if set
+                    original_count = len(live_chats)
+                    if max_items_limit and max_items_limit > 0 and original_count > max_items_limit:
+                        live_chats = live_chats[:max_items_limit]
+                        logger.info(f"📊 Limiting live chats to first {max_items_limit} (out of {original_count} total)")
+                    
+                    # Anonymize live chat users
+                    live_chats = self.user_randomizer.anonymize_comments(live_chats)
+                    
+                    if dry_run:
+                        logger.info(f"📊 DRY RUN: Found {len(live_chats)} live chat messages (showing import-ready data)...")
+                    else:
+                        logger.info(f"📊 Processing {len(live_chats)} live chat messages...")
+                    
+                    # In comments_only mode (not dry_run), use configured asset_id from yaml
+                    # Otherwise use result asset_id (from upload) or fallback to passed asset_id
+                    if comments_only and not dry_run and result.get('asset_id'):
+                        target_asset_id = result['asset_id']  # Use configured asset_id from yaml
+                    else:
+                        target_asset_id = result.get('asset_id') or asset_id
+                    
+                    livechat_stats_result = self.comment_importer.import_live_chats(
+                        live_chats, 
+                        target_asset_id
+                    )
+                    livechat_imported = livechat_stats_result['imported']
+                    logger.info(f"✅ Live chats processed: {livechat_stats_result['imported']}/{livechat_stats_result['total']}")
+                else:
+                    logger.info("No live chat available for this video")
             
             # Step 5 (continued): Extract and import comments (only those with timestamps)
             logger.info("[Step 5/5] Extracting and importing comments (with timestamps only)...")
@@ -300,7 +305,7 @@ class BatchProcessor:
         
         return result
     
-    def process_list(self, list_file: str, dry_run: bool = False, video_only: bool = False, comments_only: bool = False, max_items_limit: int = None, asset_id: str = None) -> List[Dict]:
+    def process_list(self, list_file: str, dry_run: bool = False, video_only: bool = False, comments_only: bool = False, max_items_limit: int = None, asset_id: str = None, skip_live_chat: bool = False) -> List[Dict]:
         """
         Process entire list.txt file
         
@@ -311,6 +316,7 @@ class BatchProcessor:
             comments_only: If True, only import comments (skip video upload)
             max_items_limit: Maximum number of items to process (None = all, number = limit)
             asset_id: Asset ID to use in comments_only mode (from env var or previous upload)
+            skip_live_chat: If True, skip live chat extraction
             
         Returns:
             List of result dicts
@@ -330,7 +336,8 @@ class BatchProcessor:
                 video_only=video_only,
                 comments_only=comments_only,
                 asset_id=asset_id,  # Use asset_id from env var (comments_only) or from upload (normal mode)
-                max_items_limit=max_items_limit
+                max_items_limit=max_items_limit,
+                skip_live_chat=skip_live_chat
             )
             
             results.append(result)
