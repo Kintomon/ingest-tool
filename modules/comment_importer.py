@@ -65,10 +65,10 @@ class CommentImporter:
         
         # Backend uses django-graphql-jwt with JWT_LONG_RUNNING_REFRESH_TOKEN
         # The refresh token must be sent as a cookie, NOT in GraphQL variables
+        # The new JWT token is returned in cookies, not in the response body
         mutation = """
         mutation RefreshToken {
             refreshToken {
-                token
                 payload
                 refreshExpiresIn
             }
@@ -112,21 +112,14 @@ class CommentImporter:
                 logger.error("Token refresh returned no data")
                 return False
             
-            # Check if new token is in the response payload
-            new_token = result.get('token')
-            
-            if new_token:
-                self.jwt_token = new_token
+            # The new JWT token is returned in cookies, NOT in the GraphQL response
+            new_cookies = response.cookies
+            if 'JWT' in new_cookies:
+                self.jwt_token = new_cookies['JWT']
                 logger.info("✅ JWT token refreshed successfully")
             else:
-                # Try to get from cookies as fallback
-                new_cookies = response.cookies
-                if 'JWT' in new_cookies:
-                    self.jwt_token = new_cookies['JWT']
-                    logger.info("✅ JWT token refreshed from cookies")
-                else:
-                    logger.warning("Token refresh: No new token in response")
-                    return False
+                logger.error("Token refresh: No JWT cookie in response")
+                return False
             
             # Note: With JWT_LONG_RUNNING_REFRESH_TOKEN, the refresh token cookie persists
             # and doesn't need to be updated on each refresh
