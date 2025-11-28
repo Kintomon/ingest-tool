@@ -7,21 +7,12 @@ from typing import Optional, Dict, Any
 
 
 class Config:
-    """Configuration manager with environment variable and YAML file support"""
-    
     def __init__(self, config_file: Optional[str] = None):
-        """
-        Initialize configuration
-        
-        Args:
-            config_file: Path to YAML config file (optional)
-        """
         self.config_file = config_file or "config.yaml"
         self._config: Dict[str, Any] = {}
         self._load_config()
     
     def _load_config(self):
-        """Load configuration from file if it exists"""
         config_path = Path(self.config_file)
         if config_path.exists():
             try:
@@ -34,24 +25,11 @@ class Config:
             self._config = {}
     
     def get(self, key: str, default: Any = None, env_var: Optional[str] = None) -> Any:
-        """
-        Get configuration value with priority: env var > config file > default
-        
-        Args:
-            key: Configuration key (dot notation supported, e.g., 'api.backend_url')
-            env_var: Environment variable name (if different from key)
-            default: Default value if not found
-            
-        Returns:
-            Configuration value
-        """
-        # First check environment variable
         env_key = env_var or key.upper().replace('.', '_')
         env_value = os.getenv(env_key)
         if env_value is not None:
             return env_value
         
-        # Then check config file
         if '.' in key:
             keys = key.split('.')
             value = self._config
@@ -67,11 +45,9 @@ class Config:
             if key in self._config:
                 return self._config[key]
         
-        # Return default
         return default
     
     def get_bool(self, key: str, default: bool = False, env_var: Optional[str] = None) -> bool:
-        """Get boolean configuration value"""
         value = self.get(key, default, env_var)
         if isinstance(value, bool):
             return value
@@ -80,7 +56,6 @@ class Config:
         return bool(value)
     
     def get_int(self, key: str, default: int = 0, env_var: Optional[str] = None) -> int:
-        """Get integer configuration value"""
         value = self.get(key, default, env_var)
         try:
             return int(value)
@@ -88,7 +63,6 @@ class Config:
             return default
     
     def get_float(self, key: str, default: float = 0.0, env_var: Optional[str] = None) -> float:
-        """Get float configuration value"""
         value = self.get(key, default, env_var)
         try:
             return float(value)
