@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-YouTube Video Ingestion Tool
-
-Reads list.txt and processes each YouTube URL.
-Supports configuration via config.yaml and environment variables.
-"""
 
 import os
 import sys
@@ -25,10 +19,8 @@ from modules.auth_wrapper import AuthWrapper, AuthError
 
 
 def main():
-    # Load configuration
     config = Config()
     
-    # Setup logging
     log_level = config.get('logging.level', 'INFO')
     log_file = config.get('logging.log_file', '')
     verbose = config.get_bool('logging.verbose', False)
@@ -37,7 +29,6 @@ def main():
     import logging
     logger = logging.getLogger(__name__)
     
-    # Get configuration values
     backend_url = config.get('api.backend_url', 'https://api-dev.incast.ai')
     publish_url = config.get('api.publish_url', 'https://api-dev.incast.ai/publish-comment')
     list_file = config.get('processing.list_file', 'list.txt')
@@ -47,7 +38,6 @@ def main():
     video_only = config.get_bool('modes.video_only', False)
     comments_only = config.get_bool('modes.comments_only', False)
     
-    # In comments_only mode, get asset_id from config
     asset_id = None
     if comments_only:
         asset_id = config.get('modes.asset_id', '')
@@ -59,31 +49,27 @@ def main():
         elif asset_id:
             logger.info(f"📌 Using asset_id from config: {asset_id}")
         elif dry_run:
-            asset_id = "dry-run-asset-id"  # Dummy for dry_run
+            asset_id = "dry-run-asset-id"
             logger.info("🧪 DRY RUN: Using dummy asset_id")
     
-    max_retries = config.get_int('processing.max_retries', 3)
     rate_limit = config.get_float('processing.rate_limit', 0.5)
     cache_cleanup_days = config.get_int('cache.cleanup_after_days', 30)
     skip_live_chat = config.get_bool('processing.skip_live_chat', False)
     
-    # Get max items limit (default to 10 in dry_run, "all" otherwise)
     max_items_limit = config.get('processing.max_items_limit', '10' if dry_run else 'all')
     if max_items_limit and max_items_limit.lower() == 'all':
-        max_items_limit = None  # None means no limit
+        max_items_limit = None
     else:
         try:
             max_items_limit = int(max_items_limit) if max_items_limit else None
         except (ValueError, TypeError):
             max_items_limit = 10 if dry_run else None
     
-    # Ensure Firebase API key is provided
     if not firebase_api_key or firebase_api_key == 'DUMMY_API_KEY':
         logger.error("❌ Firebase API key not configured!")
         logger.error("   Set FIREBASE_API_KEY environment variable or configure firebase.api_key in config.yaml")
         sys.exit(1)
-    
-    # Check input file exists
+        
     if not os.path.exists(list_file):
         logger.error(f"❌ Error: Input file '{list_file}' not found")
         logger.error(f"   Create {list_file} with format: youtube_url,category")
@@ -91,7 +77,6 @@ def main():
             logger.error(f"   For COMMENTS_ONLY mode: youtube_url,category,asset_id")
         sys.exit(1)
     
-    # Print banner
     logger.info("=" * 80)
     logger.info("🎬 YouTube Video Ingestion Tool")
     logger.info("=" * 80)
@@ -104,12 +89,10 @@ def main():
     logger.info("=" * 80)
     logger.info(f"Input file: {list_file}")
     logger.info(f"Backend: {backend_url}")
-    logger.info(f"Max retries: {max_retries}")
     logger.info(f"Rate limit: {rate_limit}s")
     logger.info(f"Max items limit: {max_items_limit if max_items_limit else 'all (no limit)'}")
     logger.info("=" * 80)
-
-    # Prompt user for credentials
+    
     logger.info("\n🔐 Authentication Required")
     logger.info("=" * 80)
     
@@ -136,11 +119,9 @@ def main():
     jwt_token = auth_result['jwt_token']
     refresh_token = auth_result['refresh_token']
     
-    # Cleanup old cache files if enabled
     if config.get_bool('cache.enabled', True) and cache_cleanup_days > 0:
         cleanup_cache_files(days_old=cache_cleanup_days)
     
-    # Initialize modules
     youtube_processor = YouTubeProcessor()
     user_randomizer = UserRandomizer()
     
@@ -148,21 +129,17 @@ def main():
         backend_url=backend_url,
         jwt_token=jwt_token,
         refresh_token=refresh_token if refresh_token else None,
-        dry_run=dry_run,
-        max_retries=max_retries
+        dry_run=dry_run
     )
     
     comment_importer = CommentImporter(
         publish_url=publish_url,
         jwt_token=jwt_token,
         refresh_token=refresh_token if refresh_token else None,
-        dry_run=dry_run,
-        max_retries=max_retries
+        dry_run=dry_run
     )
-    # Set backend URL for token refresh capability
     comment_importer.set_backend_url(backend_url)
     
-    # Process
     try:
         batch_processor = BatchProcessor(
             youtube_processor=youtube_processor,
@@ -171,7 +148,6 @@ def main():
             user_randomizer=user_randomizer
         )
         
-        # Process list
         results = batch_processor.process_list(
             list_file, 
             dry_run=dry_run, 

@@ -1,4 +1,4 @@
-"""Asset Creator via GraphQL Mutation - Works like Frontend"""
+"""Asset Creator via GraphQL Mutation"""
 
 import json
 import logging
@@ -13,27 +13,13 @@ logger = logging.getLogger(__name__)
 
 
 class AssetCreator:
-    """Create asset in InCast via GraphQL getSignedUrl mutation (like frontend)"""
-    
-    def __init__(self, backend_url: str, jwt_token: str, refresh_token: Optional[str] = None, dry_run: bool = False, max_retries: int = 3):
-        """
-        Initialize asset creator
-        
-        Args:
-            backend_url: Backend GraphQL URL (e.g., 'https://api-dev.incast.ai/graphql/')
-            jwt_token: JWT authentication token
-            refresh_token: Refresh token for token refresh (optional, will try to get from cookies if not provided)
-            dry_run: If True, don't actually make API calls
-            max_retries: Maximum number of retry attempts for API calls
-        """
+    def __init__(self, backend_url: str, jwt_token: str, refresh_token: Optional[str] = None, dry_run: bool = False):
         self.backend_url = backend_url.rstrip('/') + '/graphql/'
         self.jwt_token = jwt_token
         self.refresh_token = refresh_token
         self.dry_run = dry_run
-        self.max_retries = max_retries
     
     def _decode_jwt_payload(self, token: str) -> Optional[Dict]:
-        """Decode JWT payload to get expiry"""
         try:
             parts = token.split('.')
             if len(parts) < 2:
@@ -49,16 +35,9 @@ class AssetCreator:
             return None
     
     def _token_expires_soon(self, token: str, threshold_seconds: int = 900) -> bool:
-        """
-        Check if token expires soon (like frontend tokenExpiresSoon)
-        
-        Args:
-            token: JWT token
-            threshold_seconds: Refresh if expires within this many seconds (default 15 min = 900)
-        """
         payload = self._decode_jwt_payload(token)
         if not payload or 'exp' not in payload:
-            return True  # If can't decode, assume expired
+            return True
         
         exp_timestamp = payload['exp']
         current_timestamp = int(time.time())
@@ -67,12 +46,6 @@ class AssetCreator:
         return expires_in < threshold_seconds
     
     def _refresh_token(self) -> bool:
-        """
-        Refresh JWT token using refreshToken mutation (requires refreshToken parameter)
-        
-        Returns:
-            bool: True if refresh successful, False otherwise
-        """
         if self.dry_run:
             logger.info("🧪 DRY RUN: Would refresh token")
             return True
@@ -82,37 +55,41 @@ class AssetCreator:
             logger.error("   Authenticate via AuthWrapper to obtain backend refresh token")
             return False
         
+        # Backend uses django-graphql-jwt with JWT_LONG_RUNNING_REFRESH_TOKEN
+        # The refresh token must be sent as a cookie, NOT in GraphQL variables
         mutation = """
-        mutation RefreshToken($refreshToken: String!) {
-            refreshToken(refreshToken: $refreshToken) {
+        mutation RefreshToken {
+            refreshToken {
                 token
                 payload
-                refreshToken
                 refreshExpiresIn
             }
         }
         """
         
-        variables = {
-            "refreshToken": self.refresh_token
-        }
-        
         payload = {
-            "query": mutation,
-            "variables": variables
+            "query": mutation
         }
         
         try:
             response = requests.post(
                 self.backend_url,
                 json=payload,
-                cookies={'JWT': self.jwt_token},
+                cookies={
+                    'JWT': self.jwt_token,
+                    'JWT-refresh-token': self.refresh_token
+                },
                 headers={'Content-Type': 'application/json'},
                 timeout=60
             )
             
             if response.status_code != 200:
-                logger.error(f"Token refresh failed: HTTP {response.status_code}")
+                try:
+                    error_body = response.text
+                    logger.error(f"Token refresh failed: HTTP {response.status_code}")
+                    logger.error(f"Response body: {error_body}")
+                except:
+                    logger.error(f"Token refresh failed: HTTP {response.status_code}")
                 return False
             
             data = response.json()
@@ -127,9 +104,8 @@ class AssetCreator:
                 logger.error("Token refresh returned no data")
                 return False
             
-            # Update JWT token from response
+            # Check if new token is in the response payload
             new_token = result.get('token')
-            new_refresh_token = result.get('refreshToken')
             
             if new_token:
                 self.jwt_token = new_token
@@ -144,10 +120,8 @@ class AssetCreator:
                     logger.warning("Token refresh: No new token in response")
                     return False
             
-            # Update refresh token if provided
-            if new_refresh_token:
-                self.refresh_token = new_refresh_token
-                logger.info("✅ Refresh token updated")
+            # Note: With JWT_LONG_RUNNING_REFRESH_TOKEN, the refresh token cookie persists
+            # and doesn't need to be updated on each refresh
             
             return True
                 
@@ -156,38 +130,12 @@ class AssetCreator:
             return False
     
     def _ensure_valid_token(self):
-        """Check and refresh token if needed (like frontend AuthWrapper)"""
         if self._token_expires_soon(self.jwt_token):
             logger.info("🔄 Token expires soon, refreshing...")
             if not self._refresh_token():
                 logger.warning("⚠️  Token refresh failed, continuing with current token")
     
-    def get_signed_url(
-        self,
-        file_name: str,
-        asset_name: str,
-        asset_description: str,
-        metadata: Optional[Dict] = None
-    ) -> Dict:
-        """
-        Get signed URL from backend (like frontend getSignedUrl mutation)
-        
-        Args:
-            file_name: Video file name (e.g., 'video.mp4')
-            asset_name: Video title/name
-            asset_description: Video description
-            metadata: Additional metadata dict
-            
-        Returns:
-            dict: {
-                'upload_url': str,
-                'asset_id': str,
-                'asset_name': str,
-                'asset_description': str,
-                'error': Optional[str]
-            }
-        """
-        # GraphQL mutation (same as frontend)
+    def get_signed_url(self, file_name: str, asset_name: str, asset_description: str, metadata: Optional[Dict] = None) -> Dict:
         mutation = """
         mutation GetSignedUrl(
             $fileName: String!
@@ -222,7 +170,6 @@ class AssetCreator:
             "variables": variables
         }
         
-        # Dry run mode
         if self.dry_run:
             logger.info("🧪 DRY RUN: Would get signed URL (NO actual API call)")
             return {
@@ -232,12 +179,10 @@ class AssetCreator:
                 'asset_description': asset_description,
             }
         
-        # Ensure token is valid before making request
         self._ensure_valid_token()
         
-        # Make API call with retry logic
         try:
-            @retry_with_backoff(max_retries=self.max_retries, exceptions=(requests.RequestException,))
+            @retry_with_backoff(exceptions=(requests.RequestException,))
             def _make_request():
                 return requests.post(
                     self.backend_url,
@@ -283,20 +228,6 @@ class AssetCreator:
             return {'error': str(e)}
     
     def upload_file_to_signed_url(self, file_path: str, upload_url: str, content_type: Optional[str] = None) -> Dict:
-        """
-        Upload file to signed URL using PUT request (like frontend)
-        
-        Args:
-            file_path: Local path to video file
-            upload_url: Signed URL from getSignedUrl
-            content_type: MIME type (auto-detected if not provided)
-            
-        Returns:
-            dict: {
-                'success': bool,
-                'error': Optional[str]
-            }
-        """
         import os
         
         if not os.path.exists(file_path):
@@ -305,7 +236,6 @@ class AssetCreator:
                 'error': f"File not found: {file_path}"
             }
         
-        # Auto-detect content type if not provided
         if not content_type:
             content_type = mimetypes.guess_type(file_path)[0] or 'video/mp4'
         
@@ -317,7 +247,6 @@ class AssetCreator:
             return {'success': True}
         
         try:
-            # Upload file to signed URL (like frontend does)
             with open(file_path, 'rb') as f:
                 response = requests.put(
                     upload_url,

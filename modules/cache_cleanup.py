@@ -9,21 +9,10 @@ logger = logging.getLogger(__name__)
 
 
 def cleanup_cache_files(days_old: int = 30, pattern: str = None):
-    """
-    Clean up cache files older than specified days
-    
-    Args:
-        days_old: Delete cache files older than this many days
-        pattern: Glob pattern for cache files (if None, cleans both comments and livechat)
-        
-    Returns:
-        Number of files deleted
-    """
     if days_old <= 0:
         logger.warning("Cache cleanup disabled (days_old <= 0)")
         return 0
     
-    # Use cache directory
     cache_dir = Path("cache")
     if not cache_dir.exists():
         logger.debug("Cache directory does not exist, nothing to clean")
@@ -32,7 +21,6 @@ def cleanup_cache_files(days_old: int = 30, pattern: str = None):
     cutoff_time = datetime.now() - timedelta(days=days_old)
     deleted_count = 0
     
-    # Default patterns: both comments and livechat cache files
     patterns = [pattern] if pattern else ["comments_cache_*.json", "livechat_cache_*.json"]
     
     for pattern_item in patterns:

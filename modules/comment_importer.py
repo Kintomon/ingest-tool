@@ -12,34 +12,19 @@ logger = logging.getLogger(__name__)
 
 
 class CommentImporter:
-    """Import comments via Cloud Function (triggers NLP processing)"""
-    
-    def __init__(self, publish_url: str, jwt_token: str, refresh_token: Optional[str] = None, dry_run: bool = False, max_retries: int = 3):
-        """
-        Initialize comment importer
-        
-        Args:
-            publish_url: Cloud Function URL (e.g., 'https://api-dev.incast.ai/publish-comment')
-            jwt_token: JWT authentication token (can be updated via refresh)
-            refresh_token: Refresh token for token refresh (optional)
-            dry_run: If True, don't actually make API calls
-            max_retries: Maximum number of retry attempts for API calls
-        """
+    def __init__(self, publish_url: str, jwt_token: str, refresh_token: Optional[str] = None, dry_run: bool = False):
         self.publish_url = publish_url
         self.jwt_token = jwt_token
         self.refresh_token = refresh_token
         self.dry_run = dry_run
-        self.max_retries = max_retries
         self.imported_count = 0
         self.failed_count = 0
-        self.backend_url = None  # Will be set if needed for token refresh
+        self.backend_url = None
     
     def set_backend_url(self, backend_url: str):
-        """Set backend URL for token refresh"""
         self.backend_url = backend_url.rstrip('/') + '/graphql/'
     
     def _decode_jwt_payload(self, token: str) -> Optional[Dict]:
-        """Decode JWT payload to get expiry"""
         try:
             parts = token.split('.')
             if len(parts) < 2:
@@ -55,7 +40,6 @@ class CommentImporter:
             return None
     
     def _token_expires_soon(self, token: str, threshold_seconds: int = 900) -> bool:
-        """Check if token expires soon (15 min threshold)"""
         payload = self._decode_jwt_payload(token)
         if not payload or 'exp' not in payload:
             return True
@@ -67,7 +51,6 @@ class CommentImporter:
         return expires_in < threshold_seconds
     
     def _refresh_token(self) -> bool:
-        """Refresh JWT token using refreshToken mutation (requires refreshToken parameter)"""
         if not self.backend_url:
             logger.warning("Cannot refresh token: backend_url not set")
             return False
@@ -80,37 +63,41 @@ class CommentImporter:
             logger.info("🧪 DRY RUN: Would refresh token")
             return True
         
+        # Backend uses django-graphql-jwt with JWT_LONG_RUNNING_REFRESH_TOKEN
+        # The refresh token must be sent as a cookie, NOT in GraphQL variables
         mutation = """
-        mutation RefreshToken($refreshToken: String!) {
-            refreshToken(refreshToken: $refreshToken) {
+        mutation RefreshToken {
+            refreshToken {
                 token
                 payload
-                refreshToken
                 refreshExpiresIn
             }
         }
         """
         
-        variables = {
-            "refreshToken": self.refresh_token
-        }
-        
         payload = {
-            "query": mutation,
-            "variables": variables
+            "query": mutation
         }
         
         try:
             response = requests.post(
                 self.backend_url,
                 json=payload,
-                cookies={'JWT': self.jwt_token},
+                cookies={
+                    'JWT': self.jwt_token,
+                    'JWT-refresh-token': self.refresh_token
+                },
                 headers={'Content-Type': 'application/json'},
                 timeout=60
             )
             
             if response.status_code != 200:
-                logger.error(f"Token refresh failed: HTTP {response.status_code}")
+                try:
+                    error_body = response.text
+                    logger.error(f"Token refresh failed: HTTP {response.status_code}")
+                    logger.error(f"Response body: {error_body}")
+                except:
+                    logger.error(f"Token refresh failed: HTTP {response.status_code}")
                 return False
             
             data = response.json()
@@ -125,15 +112,14 @@ class CommentImporter:
                 logger.error("Token refresh returned no data")
                 return False
             
-            # Update JWT token from response
+            # Check if new token is in the response payload
             new_token = result.get('token')
-            new_refresh_token = result.get('refreshToken')
             
             if new_token:
                 self.jwt_token = new_token
                 logger.info("✅ JWT token refreshed successfully")
             else:
-                # Try to get from cookies as fallback (backend has JWT_HIDE_TOKEN_FIELDS=True)
+                # Try to get from cookies as fallback
                 new_cookies = response.cookies
                 if 'JWT' in new_cookies:
                     self.jwt_token = new_cookies['JWT']
@@ -142,10 +128,8 @@ class CommentImporter:
                     logger.warning("Token refresh: No new token in response")
                     return False
             
-            # Update refresh token if provided
-            if new_refresh_token:
-                self.refresh_token = new_refresh_token
-                logger.info("✅ Refresh token updated")
+            # Note: With JWT_LONG_RUNNING_REFRESH_TOKEN, the refresh token cookie persists
+            # and doesn't need to be updated on each refresh
             
             return True
                 
@@ -154,49 +138,24 @@ class CommentImporter:
             return False
     
     def _ensure_valid_token(self):
-        """Check and refresh token if needed"""
         if self._token_expires_soon(self.jwt_token):
             logger.info("🔄 Token expires soon, refreshing before comment import...")
             if not self._refresh_token():
                 logger.warning("⚠️  Token refresh failed, continuing with current token")
     
-    def import_comments(
-        self,
-        comments: List[Dict],
-        asset_id: str,
-        rate_limit: float = 0.5
-    ) -> Dict[str, int]:
-        """
-        Import comments via Cloud Function
-        Maps YouTube comment IDs to InCast comment IDs for parent_id tracking
-        
-        Args:
-            comments: List of comment dicts (from YouTubeProcessor)
-            asset_id: Asset UUID
-            rate_limit: Seconds between API calls
-            
-        Returns:
-            dict: {'imported': int, 'failed': int, 'total': int}
-        """
+    def import_comments(self, comments: List[Dict], asset_id: str, rate_limit: float = 0.5) -> Dict[str, int]:
         pubnub_channel = f"comments_{asset_id}"
         
-        # Ensure token is valid before starting long operation
         self._ensure_valid_token()
         
-        # Map YouTube comment IDs to InCast comment IDs
         parent_map = {}
         
-        # Note: max_items_limit is applied in batch_processor before passing to this method
-        
-        # Import comments (parents first, then replies)
         total = len(comments)
         
-        # Check token periodically during long operations (every 50 comments)
         last_token_check = 0
         TOKEN_CHECK_INTERVAL = 50
         
         for idx, comment in enumerate(comments, 1):
-            # Periodic token refresh check during long operations
             if idx - last_token_check >= TOKEN_CHECK_INTERVAL:
                 if self._token_expires_soon(self.jwt_token):
                     logger.info(f"🔄 Token expires soon at comment {idx}/{total}, refreshing...")
@@ -206,10 +165,8 @@ class CommentImporter:
             yt_id = comment.get('yt_id', f"yt_{idx}")
             youtube_parent_id = comment.get('parent_id')
             
-            # Look up parent ID from YouTube ID mapping
             incast_parent_id = parent_map.get(youtube_parent_id, None) if youtube_parent_id else None
             
-            # Convert commented_at to number (FE sends as number, BE converts to float then string)
             commented_at = comment.get('commented_at', '0')
             try:
                 commented_at = float(commented_at) if commented_at else 0
@@ -222,20 +179,17 @@ class CommentImporter:
                 'user_name': comment.get('user_name', 'Unknown'),
                 'profile_picture': comment.get('profile_picture', ''),
                 'pubnub_channel': pubnub_channel,
-                'commented_at': commented_at,  # Number (matches FE format)
+                'commented_at': commented_at,
                 'asset_id': asset_id,
             }
-            # Only include parent_id if it exists (for replies)
             if incast_parent_id:
                 payload['parent_id'] = incast_parent_id
             
             if self.dry_run:
                 self.imported_count += 1
-                # Generate a fake UUID for dry-run mode
                 fake_uuid = f"dry-run-{idx}"
                 parent_map[yt_id] = fake_uuid
                 
-                # Log import-ready data for review
                 logger.info(f"\n{'='*80}")
                 logger.info(f"🧪 DRY RUN - Import Ready Data [{idx}/{total}]")
                 logger.info(f"{'='*80}")
@@ -250,7 +204,6 @@ class CommentImporter:
                 logger.info(f"{'='*80}\n")
             else:
                 try:
-                    # Make single request without retry
                     response = requests.post(
                         self.publish_url,
                         json=payload,
@@ -261,7 +214,6 @@ class CommentImporter:
                     response.raise_for_status()
                     response_data = response.json()
                     
-                    # Handle string response
                     if isinstance(response_data, str):
                         response_data = json.loads(response_data)
                     
@@ -281,9 +233,26 @@ class CommentImporter:
                     self.failed_count += 1
                     status_code = e.response.status_code if hasattr(e, 'response') else 'Unknown'
                     
-                    # Just log as "skipped" without detailed error
                     comment_preview = payload['comment'][:30] if len(payload['comment']) > 30 else payload['comment']
-                    logger.info(f"⏭️  [{idx}/{total}] Skipped comment (HTTP {status_code}): {comment_preview}...")
+                    
+                    error_detail = ""
+                    is_nlp_error = False
+                    if hasattr(e, 'response') and e.response is not None:
+                        try:
+                            error_body = e.response.text
+                            error_detail = f" - {error_body[:200]}"
+                            if "NLP" in error_body or "nlp" in error_body:
+                                is_nlp_error = True
+                        except:
+                            pass
+                    
+                    if status_code == 500:
+                        if is_nlp_error:
+                            logger.info(f"⚠️  [{idx}/{total}] NLP processing failed (HTTP 500){error_detail}: {comment_preview}...")
+                        else:
+                            logger.info(f"⚠️  [{idx}/{total}] Server error (HTTP 500){error_detail}: {comment_preview}...")
+                    else:
+                        logger.info(f"⏭️  [{idx}/{total}] Skipped comment (HTTP {status_code}){error_detail}: {comment_preview}...")
                     
                 except requests.RequestException as e:
                     self.failed_count += 1
@@ -293,8 +262,7 @@ class CommentImporter:
                     self.failed_count += 1
                     logger.info(f"⏭️  [{idx}/{total}] Skipped comment (error)")
             
-            # Rate limiting
-            if idx < total:  # Don't sleep after last comment
+            if idx < total:
                 time.sleep(rate_limit)
         
         logger.info(f"Comments import complete: {self.imported_count} imported, {self.failed_count} failed, {total} total")
@@ -304,28 +272,9 @@ class CommentImporter:
             'total': total
         }
     
-    def import_live_chats(
-        self,
-        live_chats: List[Dict],
-        asset_id: str,
-        rate_limit: float = 0.5
-    ) -> Dict[str, int]:
-        """
-        Import live chat messages via Cloud Function
-        Same as import_comments but for live chat messages
-        
-        Args:
-            live_chats: List of live chat message dicts
-            asset_id: Asset UUID
-            rate_limit: Seconds between API calls
-            
-        Returns:
-            dict: {'imported': int, 'failed': int, 'total': int}
-        """
-        # Reset counters for live chat import
+    def import_live_chats(self, live_chats: List[Dict], asset_id: str, rate_limit: float = 0.5) -> Dict[str, int]:
         self.imported_count = 0
         self.failed_count = 0
         
-        # Use same import logic as comments
         return self.import_comments(live_chats, asset_id, rate_limit)
 

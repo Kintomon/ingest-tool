@@ -1,93 +1,168 @@
 # YouTube Video Ingestion Tool
 
-Ingests YouTube videos and comments from `list.txt` into InCast.
+Automated tool to ingest YouTube videos and comments into InCast platform.
 
-## 🚀 Usage
-
-**Just edit variables in `ingest.py` and run:**
+## 🚀 Quick Start
 
 ```bash
+# 1. Setup (first time only)
+./setup.sh
+
+# 2. Configure
+cp config.yaml.example config.yaml
+nano config.yaml  # Edit your settings
+
+# 3. Add videos
+nano list.txt  # Add YouTube URLs
+
+# 4. Run
+source venv/bin/activate
 python3 ingest.py
 ```
 
-**No arguments needed!**
+## 📋 Prerequisites
+
+- Python 3.8+
+- Firebase API Key
+- InCast credential
 
 ## ⚙️ Configuration
 
-Edit these variables in `ingest.py`:
+### 1. Copy and Edit `config.yaml`
 
-```python
-JWT_TOKEN = "YOUR_JWT_TOKEN_HERE"  # Your authentication token
-BACKEND_URL = "https://api-dev.incast.ai"  # Backend URL
-PUBLISH_URL = "https://api-dev.incast.ai/publish-comment"
-LIST_FILE = "list.txt"  # Input file
-MAX_COMMENTS = 100  # Max comments per video
-DRY_RUN = True  # Set False to actually upload
+```bash
+cp config.yaml.example config.yaml
+nano config.yaml
 ```
 
-## 📋 Input File
+### 2. Required Settings
 
-Create `list.txt`:
+```yaml
+firebase:
+  api_key: "YOUR_FIREBASE_API_KEY"  # Get from Firebase console
+
+api:
+  backend_url: "https://api-dev.incast.ai"
+  publish_url: "https://api-dev.incast.ai/publish-comment"
+
+modes:
+  dry_run: true  # Set false to actually upload
+  video_only: false
+  comments_only: false
+  asset_id: ""  # Required if comments_only=true
+
+processing:
+  max_items_limit: "all"  # or number like "10"
+  skip_live_chat: false
 ```
-https://youtube.com/watch?v=abc123,Finance
-https://youtube.com/watch?v=xyz789,Tech
+
+## 🔐 Authentication
+
+The tool will **prompt for email/password** when you run it:
+
+```bash
+python3 ingest.py
+# Email: your@email.com
+# Password: ********
 ```
 
-Format: `youtube_url,category`
+Credentials are authenticated via:
+1. **Firebase** (email/password)
+2. **Backend** (exchanges Firebase token for JWT)
 
-## 🔐 How to Get JWT Token
+**No tokens stored in config files!** 🔒
 
-1. Login to InCast app in browser
-2. Press **F12** → **DevTools** → **Console** tab
-3. Run:
-```javascript
-document.cookie.split('; ').find(row => row.startsWith('JWT=')).split('=')[1]
+## 📋 Input File Format
+
+Create `list.txt` with YouTube URLs:
+
 ```
-4. Copy the token and paste in `ingest.py` as `JWT_TOKEN`
+https://www.youtube.com/watch?v=dQw4w9WgXcQ,Music
+https://www.youtube.com/watch?v=jNQXAC9IVRw,Education
+```
 
-## 🧪 Testing with Dry Run
+**Format:** `youtube_url,category`
 
-**Default mode:** `DRY_RUN = True`
+## 🎯 Operating Modes
 
-- Extracts all data from YouTube
-- Shows what WOULD be uploaded
-- **No actual uploads or comments**
-- Perfect for testing workflow!
+### Normal Mode (Default)
+```yaml
+dry_run: false
+video_only: false
+comments_only: false
+```
+- Downloads video
+- Uploads to GCS and create asset
+- Imports comments & live chat
 
-**To actually ingest:** Set `DRY_RUN = False`
+### Video Only Mode
+```yaml
+video_only: true
+```
+- Only uploads video, skips comments
 
-## 🔒 User Anonymization
+### Comments Only Mode
+```yaml
+comments_only: true
+asset_id: "existing-asset-uuid-here"
+```
+- Only imports comments to existing video
+- Requires asset_id in config
 
-**Automatic privacy:**
-- YouTube users anonymized
-- "Fred23" → "Fred_47" (random)
-- Same user gets same random name across comments
-- Profile pictures removed
-- No real YouTube info exposed
+### Dry Run Mode
+```yaml
+dry_run: true
+```
+- Tests everything without uploads
+- Shows what would be imported
+- Perfect for testing! 🧪
 
-## 📦 Installation & Setup
+## 🎬 What Gets Extracted
 
-### Option 1: Automated Setup (Recommended)
+### Video Metadata
+- Title
+- Description
+- Keywords/Tags
+- Category
+
+### Comments (with timestamps)
+- Top-level comments
+- Replies (parent-child relationships)
+- Only comments with video timestamps (e.g., "at 1:30")
+- Threaded reply structure preserved
+
+### Live Chat (optional)
+- Live chat replay messages
+- Timestamps synced to video
+- Can be disabled: `skip_live_chat: true`
+
+## 🔒 Privacy & Anonymization
+
+All YouTube users are automatically anonymized:
+- `"John_Smith123"` → `"John_847"`
+- Consistent names (same user = same random name)
+- Random avatars generated (DiceBear API)
+- UUIDs assigned to each unique user
+- No real YouTube data exposed ✅
+
+## 📦 Installation
+
+### Automated Setup (Recommended)
 
 ```bash
 cd /home/mdev/InCast/Ingest-tool
 ./setup.sh
 ```
 
-This will:
-- Create virtual environment (`venv`)
-- Activate it
-- Install all dependencies
+This creates a virtual environment and installs all dependencies.
 
-### Option 2: Manual Setup
+### Manual Setup
 
 ```bash
-cd /home/mdev/InCast/Ingest-tool
-
 # Create virtual environment
 python3 -m venv venv
 
-# Activate venv
+# Activate it
 source venv/bin/activate
 
 # Install dependencies
@@ -95,81 +170,102 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### Running the Script
-
-After setup:
-
-```bash
-# Activate venv (if not already active)
-source venv/bin/activate
-
-# Run the script
-python3 ingest.py
-```
-
-**Note:** Activate venv every time you open a new terminal!
-
-## ⚙️ What It Extracts
-
-From each YouTube video:
-- **Title** - Video title
-- **Description** - Full description
-- **Keywords** - Video tags
-- **Comments** - Up to 100 comments
-
-## 🔄 Process Flow
-
-1. Read `list.txt`
-2. For each video:
-   - Extract title, description, keywords, comments
-   - Anonymize user names
-   - Create asset via GraphQL (streams URL → GCS)
-   - Import comments via Cloud Function
-   - NLP processes comments
-
-## 📊 Output
+## 📊 Output & Logs
 
 Console shows:
-- Progress per video
-- Asset IDs created
-- Comments imported count
-- User anonymization applied
-- Final summary
+```
+🎬 Processing: https://youtube.com/watch?v=...
+📹 Title: Video Name
+✅ Video uploaded successfully!
+📊 Processing 328 comments with timestamps...
+✅ Comments processed: 315/328
+✅ Live chats processed: 156/156
+```
+
+Final summary:
+```
+📊 TIMESTAMP DETECTION SUMMARY
+   ✓ Comments with timestamp: 315
+   ✗ Comments without timestamp: 1977
+   💬 Live chat messages published: 156
+   
+📊 BATCH PROCESSING SUMMARY
+Total videos: 3
+✅ Successful: 3
+💬 Total comments imported: 789
+```
 
 ## 🐛 Troubleshooting
 
-**"JWT not found"**: Login to InCast app first
+### Authentication Failed
+- Check Firebase API key in `config.yaml`
+- Verify email/password are correct
+- Ensure backend URL is accessible
 
-**"Asset creation failed"**: Check JWT token is valid
+### Video Download Fails
+- Some videos may require cookies
+- Create `cookies.txt` (Netscape format)
+- Tool will auto-detect and use it
 
-**"No comments"**: Video may have disabled comments
+### No Comments Found
+- Video may have comments disabled
+- Or no comments have timestamps
+- Check YouTube page directly
 
-## 📁 Structure
+### HTTP 400/500 Errors
+- Token may be expired (should auto-refresh)
+- Check backend is running
+- Verify API URLs in config
 
-```
-modules/
-├── youtube_processor.py  # Extract title, description, keywords, comments
-├── asset_creator.py      # GraphQL CreateAssetFromUrl
-├── comment_importer.py   # Cloud Function import
-├── user_randomizer.py    # Anonymize YouTube users
-└── batch_processor.py    # Orchestrate workflow
+## 📝 Example Workflow
 
-ingest.py                 # Main script (edit config here)
-```
+### For Interns/New Users
 
-## 🎯 Example Workflow
-
-1. **Edit config:**
-   - Set JWT_TOKEN in ingest.py
-   - Keep DRY_RUN = True
-
-2. **Test:**
+1. **Initial Setup**
    ```bash
-   python3 ingest.py
+   cd /home/mdev/InCast/Ingest-tool
+   ./setup.sh
+   cp config.yaml.example config.yaml
    ```
-   Review output, check it looks good
 
-3. **Actually ingest:**
-   - Set DRY_RUN = False
-   - python3 ingest.py
-   - Done!
+2. **Configure**
+   ```bash
+   nano config.yaml
+   # Add Firebase API key
+   # Set dry_run: true
+   ```
+
+3. **Prepare Videos**
+   ```bash
+   nano list.txt
+   # Add YouTube URLs, one per line with category
+   ```
+
+4. **Test Run (Dry Mode)**
+   ```bash
+   source venv/bin/activate
+   python3 ingest.py
+   # Enter email/password when prompted
+   # Review output - no actual uploads
+   ```
+
+5. **Actual Run**
+   ```bash
+   nano config.yaml
+   # Set dry_run: false
+   
+   python3 ingest.py
+   # Enter credentials again
+   # Watch the magic happen! ✨
+   ```
+
+## 🆘 Getting Help
+
+1. Check this README
+2. Review console output/logs
+3. Look at `config.yaml.example` for examples
+5. Ask Yehor :)!
+
+## 📄 License
+
+Internal tool for InCast platform.

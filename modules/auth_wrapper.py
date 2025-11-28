@@ -9,12 +9,10 @@ logger = logging.getLogger(__name__)
 
 
 class AuthError(Exception):
-    """Raised when authentication fails."""
+    pass
 
 
 class AuthWrapper:
-    """Handle Firebase email/password auth and backend login."""
-
     FIREBASE_SIGNIN_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
 
     def __init__(self, firebase_api_key: str, backend_url: str, timeout: int = 60):
@@ -26,17 +24,6 @@ class AuthWrapper:
         self.timeout = timeout
 
     def authenticate(self, email: str, password: str) -> Dict[str, str]:
-        """
-        Authenticate via Firebase, then exchange for backend JWT/refresh token.
-
-        Returns:
-            dict: {
-                'jwt_token': str,
-                'refresh_token': str,
-                'firebase_refresh_token': str,
-                'firebase_user_id': str,
-            }
-        """
         firebase_data = self._firebase_sign_in(email, password)
         backend_tokens = self._backend_login(firebase_data['id_token'])
 
@@ -48,7 +35,6 @@ class AuthWrapper:
         }
 
     def _firebase_sign_in(self, email: str, password: str) -> Dict[str, str]:
-        """Sign in with Firebase using email/password auth."""
         url = f"{self.FIREBASE_SIGNIN_URL}?key={self.firebase_api_key}"
         payload = {
             "email": email,
@@ -79,8 +65,6 @@ class AuthWrapper:
         }
 
     def _backend_login(self, id_token: str) -> Dict[str, str]:
-        """Exchange Firebase ID token for backend JWT and refresh token."""
-        # Only request payload, as token/refreshToken might be hidden and sent via cookies
         mutation = """
         mutation LoginMutation($idToken: String!) {
             loginMutation(idToken: $idToken) {
@@ -114,12 +98,10 @@ class AuthWrapper:
         if not login_data:
             raise AuthError("Backend login returned no data")
 
-        # Extract tokens from cookies
         jwt_token = response.cookies.get('JWT')
         refresh_token = response.cookies.get('JWT-refresh-token')
 
         if not jwt_token:
-             # Fallback: check if they are in login_data (if settings changed)
              jwt_token = login_data.get('token')
         
         if not refresh_token:
@@ -139,7 +121,6 @@ class AuthWrapper:
 
     @staticmethod
     def _extract_error(response: requests.Response) -> str:
-        """Extract error message from Firebase error responses."""
         try:
             data = response.json()
             message = data.get('error', {}).get('message')

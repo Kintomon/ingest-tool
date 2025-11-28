@@ -16,7 +16,6 @@ processing:
   list_file: "list.txt"
   max_comments: 100
   rate_limit: 0.5  # Seconds between comment API calls
-  max_retries: 3  # API call retry attempts
   retry_delay: 1.0  # Initial retry delay in seconds
   max_items_limit: "all"  # Limit items to process: "all" or number (e.g., 10, 50, 100). In dry_run mode defaults to 10.
   skip_live_chat: false  # Skip live chat extraction (only process comments)
