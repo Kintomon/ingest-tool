@@ -136,34 +136,34 @@ class BatchProcessor:
                 logger.info("[Step 5/5] Skipping live chat extraction (skip_live_chat=true)")
             else:
                 logger.info("[Step 5/5] Extracting and importing live chats...")
-            live_chats, livechat_stats = self.youtube_processor.extract_live_chat(video_url)
-            
-            if live_chats:
-                original_count = len(live_chats)
-                if max_items_limit and max_items_limit > 0 and original_count > max_items_limit:
-                    live_chats = live_chats[:max_items_limit]
-                    logger.info(f"📊 Limiting live chats to first {max_items_limit} (out of {original_count} total)")
+                live_chats, livechat_stats = self.youtube_processor.extract_live_chat(video_url)
                 
-                live_chats = self.user_randomizer.anonymize_comments(live_chats)
-                
-                if dry_run:
-                    logger.info(f"📊 DRY RUN: Found {len(live_chats)} live chat messages (showing import-ready data)...")
-                else:
-                    logger.info(f"📊 Processing {len(live_chats)} live chat messages...")
-                
-                    if comments_only and not dry_run and result.get('asset_id'):
-                        target_asset_id = result['asset_id']
-                    else:
-                        target_asset_id = result.get('asset_id') or asset_id
+                if live_chats:
+                    original_count = len(live_chats)
+                    if max_items_limit and max_items_limit > 0 and original_count > max_items_limit:
+                        live_chats = live_chats[:max_items_limit]
+                        logger.info(f"📊 Limiting live chats to first {max_items_limit} (out of {original_count} total)")
                     
-                livechat_stats_result = self.comment_importer.import_live_chats(
-                    live_chats, 
-                        target_asset_id
-                )
-                livechat_imported = livechat_stats_result['imported']
-                logger.info(f"✅ Live chats processed: {livechat_stats_result['imported']}/{livechat_stats_result['total']}")
-            else:
-                logger.info("No live chat available for this video")
+                    live_chats = self.user_randomizer.anonymize_comments(live_chats)
+                    
+                    if dry_run:
+                        logger.info(f"📊 DRY RUN: Found {len(live_chats)} live chat messages (showing import-ready data)...")
+                    else:
+                        logger.info(f"📊 Processing {len(live_chats)} live chat messages...")
+                    
+                        if comments_only and not dry_run and result.get('asset_id'):
+                            target_asset_id = result['asset_id']
+                        else:
+                            target_asset_id = result.get('asset_id') or asset_id
+                        
+                    livechat_stats_result = self.comment_importer.import_live_chats(
+                        live_chats, 
+                            target_asset_id
+                    )
+                    livechat_imported = livechat_stats_result['imported']
+                    logger.info(f"✅ Live chats processed: {livechat_stats_result['imported']}/{livechat_stats_result['total']}")
+                else:
+                    logger.info("No live chat available for this video")
             
             logger.info("[Step 5/5] Extracting and importing comments (with timestamps only)...")
             comments, timestamp_stats = self.youtube_processor.extract_comments(video_url)

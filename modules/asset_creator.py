@@ -72,11 +72,11 @@ class AssetCreator:
         }
         
         try:
+            # Only send refresh token cookie - don't send expired JWT
             response = requests.post(
                 self.backend_url,
                 json=payload,
                 cookies={
-                    'JWT': self.jwt_token,
                     'JWT-refresh-token': self.refresh_token
                 },
                 headers={'Content-Type': 'application/json'},

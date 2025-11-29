@@ -80,11 +80,11 @@ class CommentImporter:
         }
         
         try:
+            # Only send refresh token cookie - don't send expired JWT
             response = requests.post(
                 self.backend_url,
                 json=payload,
                 cookies={
-                    'JWT': self.jwt_token,
                     'JWT-refresh-token': self.refresh_token
                 },
                 headers={'Content-Type': 'application/json'},
@@ -175,6 +175,7 @@ class CommentImporter:
                 'commented_at': commented_at,
                 'asset_id': asset_id,
                 'skip_banter': True,  # Skip banter creation for bulk imports
+                'skip_pubnub': True,  # Skip PubNub for bulk imports (no real-time needed)
             }
             if incast_parent_id:
                 payload['parent_id'] = incast_parent_id
@@ -224,9 +225,38 @@ class CommentImporter:
                         self.failed_count += 1
                         
                 except requests.HTTPError as e:
-                    self.failed_count += 1
                     status_code = e.response.status_code if hasattr(e, 'response') else 'Unknown'
                     
+                    # Handle 401 - try to refresh token and retry once
+                    if status_code == 401:
+                        logger.warning(f"🔐 [{idx}/{total}] JWT expired, refreshing token...")
+                        if self._refresh_token():
+                            logger.info("✅ Token refreshed, retrying request...")
+                            try:
+                                response = requests.post(
+                                    self.publish_url,
+                                    json=payload,
+                                    cookies={'JWT': self.jwt_token},
+                                    headers={'Content-Type': 'application/json'},
+                                    timeout=30
+                                )
+                                response.raise_for_status()
+                                response_data = response.json()
+                                if isinstance(response_data, str):
+                                    response_data = json.loads(response_data)
+                                comment_response = response_data.get('comment', {})
+                                incast_comment_id = comment_response.get('id')
+                                if incast_comment_id:
+                                    parent_map[yt_id] = incast_comment_id
+                                    self.imported_count += 1
+                                    logger.info(f"  [{idx}/{total}] Imported after token refresh")
+                                    continue
+                            except Exception as retry_error:
+                                logger.warning(f"⚠️  [{idx}/{total}] Retry failed: {retry_error}")
+                        else:
+                            logger.error(f"❌ [{idx}/{total}] Token refresh failed!")
+                    
+                    self.failed_count += 1
                     comment_preview = payload['comment'][:30] if len(payload['comment']) > 30 else payload['comment']
                     
                     error_detail = ""
@@ -245,7 +275,7 @@ class CommentImporter:
                             logger.info(f"⚠️  [{idx}/{total}] NLP processing failed (HTTP 500){error_detail}: {comment_preview}...")
                         else:
                             logger.info(f"⚠️  [{idx}/{total}] Server error (HTTP 500){error_detail}: {comment_preview}...")
-                    else:
+                    elif status_code != 401:  # Don't log 401 again, already handled above
                         logger.info(f"⏭️  [{idx}/{total}] Skipped comment (HTTP {status_code}){error_detail}: {comment_preview}...")
                     
                 except requests.RequestException as e:
