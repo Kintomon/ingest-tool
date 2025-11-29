@@ -174,6 +174,7 @@ class CommentImporter:
                 'pubnub_channel': pubnub_channel,
                 'commented_at': commented_at,
                 'asset_id': asset_id,
+                'skip_banter': True,  # Skip banter creation for bulk imports
             }
             if incast_parent_id:
                 payload['parent_id'] = incast_parent_id
